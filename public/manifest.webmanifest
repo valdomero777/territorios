@@ -1,0 +1,16 @@
+{
+  "name": "Territorios del servicio",
+  "short_name": "Territorios",
+  "description": "Gestión de territorios, cuadras, capitanes y puntos de reunión.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f1f5f9",
+  "theme_color": "#0f766e",
+  "lang": "es-MX",
+  "icons": [
+    { "src": "./icono.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icono-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
