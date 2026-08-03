@@ -178,9 +178,10 @@ acarreo, formas corregidas a mano) viaja por Firestore.
 4. Copiar `.env.local.example` a `.env.local` y llenar los valores (Firebase Console →
    Configuración del proyecto → tus apps → app web → Config del SDK) para `npm run dev`.
 5. Para el sitio publicado: dar de alta los mismos valores como *secrets* en el **environment
-   "prod"** del repositorio (Settings → Environments → prod → Environment secrets) —
-   `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID`,
-   `FIREBASE_SHARED_EMAIL`. Tienen que quedar ahí y no en "Repository secrets": los secrets de un
+   "prod"** del repositorio (Settings → Environments → prod → Environment secrets), con el
+   **mismo nombre que la variable de entorno** (`deploy.yml` los pasa tal cual, sin renombrar) —
+   `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`,
+   `VITE_FIREBASE_APP_ID`, `VITE_FIREBASE_SHARED_EMAIL`. Tienen que quedar ahí y no en "Repository secrets": los secrets de un
    *environment* solo los ve un job que declare ese environment, y por eso el job `construir` de
    `deploy.yml` trae `environment: prod`. Si le pusiste protecciones al environment (revisores
    requeridos, espera), el build se va a detener a esperar esa aprobación antes de compilar.
