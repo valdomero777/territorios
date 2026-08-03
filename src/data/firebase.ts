@@ -9,16 +9,23 @@ import { initializeFirestore } from "firebase/firestore";
  * reglas de Firestore + que solo existe una cuenta en Auth), pero así se
  * puede cambiar de proyecto sin tocar código.
  */
-export const CONFIGURADO = Boolean(import.meta.env.VITE_FIREBASE_API_KEY);
+// GitHub Actions guarda los *secrets* tal cual se pegaron en la consola, y es
+// fácil que quede un salto de línea colgado al final (pegar desde un archivo,
+// por ejemplo) — con eso "grupo@territorios.app" y "grupo@territorios.app\n"
+// son cuentas distintas para Firebase Auth y el login nunca cuadra. Se
+// recorta cada valor por si acaso.
+const recortar = (v?: string) => v?.trim() ?? "";
 
-export const CORREO_COMPARTIDO = import.meta.env.VITE_FIREBASE_SHARED_EMAIL ?? "";
+export const CONFIGURADO = Boolean(recortar(import.meta.env.VITE_FIREBASE_API_KEY));
+
+export const CORREO_COMPARTIDO = recortar(import.meta.env.VITE_FIREBASE_SHARED_EMAIL);
 
 const app = CONFIGURADO
   ? initializeApp({
-      apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-      appId: import.meta.env.VITE_FIREBASE_APP_ID,
+      apiKey: recortar(import.meta.env.VITE_FIREBASE_API_KEY),
+      authDomain: recortar(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN),
+      projectId: recortar(import.meta.env.VITE_FIREBASE_PROJECT_ID),
+      appId: recortar(import.meta.env.VITE_FIREBASE_APP_ID),
     })
   : null;
 
