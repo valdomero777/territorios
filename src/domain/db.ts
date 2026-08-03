@@ -1,7 +1,7 @@
-import { mapaBase } from "./mapa";
+import { areaYCentroide, mapaBase } from "./mapa";
 import { hoy } from "./fechas";
 import { MODALIDADES_POR_DEFECTO } from "./tipos";
-import type { BaseDatos, Config, Cuadra, Jornada, Persona, Territorio } from "./tipos";
+import type { BaseDatos, Config, Cuadra, Jornada, LatLng, Persona, Territorio } from "./tipos";
 
 export const VERSION_BD = 1;
 
@@ -68,7 +68,31 @@ export function baseInicial(): BaseDatos {
     asignaciones: [],
     eventos: [],
     ciclos: [{ id: nuevoId("ciclo"), nombre: "Ciclo 1", inicio, fin: null }],
+    geometriaEditada: {},
   };
+}
+
+/**
+ * Aplica el borrador de forma corregida a mano (`geometriaEditada`) sobre las
+ * cuadras que correspondan. Gana sobre la geometría del mapa base: se llama
+ * después de refrescarla, tanto al migrar como al guardar una edición nueva.
+ */
+export function aplicarGeometriaEditada(
+  territorios: Territorio[],
+  geometriaEditada: Record<string, LatLng[]>,
+): Territorio[] {
+  if (!Object.keys(geometriaEditada).length) return territorios;
+  return territorios.map((t) => {
+    let cambio = false;
+    const cuadras = t.cuadras.map((c) => {
+      const anillo = geometriaEditada[c.id];
+      if (!anillo) return c;
+      cambio = true;
+      const { areaM2, centro: centroLatLng } = areaYCentroide(anillo);
+      return { ...c, latlng: anillo, centroLatLng, areaM2 };
+    });
+    return cambio ? { ...t, cuadras } : t;
+  });
 }
 
 /**
@@ -164,6 +188,8 @@ export function migrar(db: BaseDatos): BaseDatos {
     };
   });
 
+  const geometriaEditada = db.geometriaEditada ?? {};
+
   const salida: BaseDatos = {
     ...base,
     ...db,
@@ -176,11 +202,12 @@ export function migrar(db: BaseDatos): BaseDatos {
         : base.config.modalidades,
       notaRol: db.config?.notaRol ?? base.config.notaRol,
     },
-    territorios,
+    territorios: aplicarGeometriaEditada(territorios, geometriaEditada),
     personas,
     jornadas,
     asignaciones: db.asignaciones ?? [],
     eventos: db.eventos ?? [],
+    geometriaEditada,
   };
   delete (salida as Partial<BaseDatos> & { capitanes?: unknown }).capitanes;
   if (!salida.ciclos.length) salida.ciclos = base.ciclos;

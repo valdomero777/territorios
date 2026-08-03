@@ -3,13 +3,13 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { crearRepo } from "../data/repo";
-import { baseInicial, cicloAbierto, migrar, nuevoId } from "../domain/db";
+import { aplicarGeometriaEditada, baseInicial, cicloAbierto, migrar, nuevoId } from "../domain/db";
 import { construirIndice, resumenGlobal, resumenesTerritorio } from "../domain/estado";
 import type { Indice, ResumenGlobal, ResumenTerritorio } from "../domain/estado";
 import { hoy, sumarDias } from "../domain/fechas";
 import { anioServicioDe } from "../domain/s13";
 import type {
-  AsignacionTerritorio, BaseDatos, Ciclo, Config, Cuadra, Fecha, Jornada, Persona,
+  AsignacionTerritorio, BaseDatos, Ciclo, Config, Cuadra, Fecha, Jornada, LatLng, Persona,
   PuntoReunion, Registro, Territorio,
 } from "../domain/tipos";
 
@@ -19,6 +19,13 @@ interface Acciones {
   guardarTerritorio(id: number, cambios: Partial<Omit<Territorio, "cuadras">>): void;
   guardarCuadra(territorioId: number, cuadraId: string, cambios: Partial<Cuadra>): void;
   moverCuadra(cuadraId: string, destinoId: number, nuevaLetra?: string): void;
+
+  /** Corrige a mano la forma de una cuadra (arrastrando vértices en el Mapa). */
+  guardarFormaCuadra(cuadraId: string, anillo: LatLng[]): void;
+  /** Vuelve a la geometría del mapa base para esa cuadra. */
+  restablecerFormaCuadra(cuadraId: string): void;
+  /** Vacía el borrador completo, típicamente tras exportar y reemplazar mapa.json. */
+  limpiarBorradorGeometria(): void;
 
   guardarPersona(p: Omit<Persona, "id"> & { id?: string }): void;
   eliminarPersona(id: string): void;
@@ -189,8 +196,56 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
             registros: d.registros.map((r) =>
               r.cuadraId === cuadraId ? { ...r, cuadraId: nuevoIdCuadra } : r,
             ),
+            // El borrador de forma también sigue a la cuadra, si tenía una.
+            geometriaEditada:
+              cuadraId in d.geometriaEditada
+                ? Object.fromEntries(
+                    Object.entries(d.geometriaEditada).map(([id, anillo]) =>
+                      id === cuadraId ? [nuevoIdCuadra, anillo] : [id, anillo],
+                    ),
+                  )
+                : d.geometriaEditada,
           };
         }),
+
+      guardarFormaCuadra: (cuadraId, anillo) =>
+        actualizar((d) => {
+          const geometriaEditada = { ...d.geometriaEditada, [cuadraId]: anillo };
+          return {
+            ...d,
+            geometriaEditada,
+            territorios: aplicarGeometriaEditada(d.territorios, { [cuadraId]: anillo }),
+          };
+        }),
+
+      restablecerFormaCuadra: (cuadraId) =>
+        actualizar((d) => {
+          if (!(cuadraId in d.geometriaEditada)) return d;
+          const geometriaEditada = { ...d.geometriaEditada };
+          delete geometriaEditada[cuadraId];
+          // La geometría base se indexa por `origen` (no cambia si la cuadra se
+          // movió de territorio), así que hay que resolverlo primero.
+          const actual = d.territorios.flatMap((t) => t.cuadras).find((c) => c.id === cuadraId);
+          const origen = actual?.origen ?? cuadraId;
+          const original = baseInicial()
+            .territorios.flatMap((t) => t.cuadras)
+            .find((c) => c.origen === origen);
+          if (!original) return { ...d, geometriaEditada };
+          return {
+            ...d,
+            geometriaEditada,
+            territorios: d.territorios.map((t) => ({
+              ...t,
+              cuadras: t.cuadras.map((c) =>
+                c.id === cuadraId
+                  ? { ...c, latlng: original.latlng, centroLatLng: original.centroLatLng, areaM2: original.areaM2 }
+                  : c,
+              ),
+            })),
+          };
+        }),
+
+      limpiarBorradorGeometria: () => actualizar((d) => ({ ...d, geometriaEditada: {} })),
 
       guardarPersona: (p) =>
         actualizar((d) => {

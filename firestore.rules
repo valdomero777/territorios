@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// Copia esto en Firebase Console → Firestore Database → Reglas.
+//
+// No hay cuentas por persona: solo existe UNA cuenta en Firebase
+// Authentication (correo/contraseña), y esa contraseña es la clave que se
+// comparte con el grupo (ver README, "Modo compartido"). Por eso basta con
+// exigir que haya sesión — no hace falta comparar el usuario contra nada.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /congregacion/{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

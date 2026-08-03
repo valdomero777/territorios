@@ -11,7 +11,7 @@ import type { LatLng } from "../domain/tipos";
 import { useApp } from "../hooks/useApp";
 
 type ModoColor = "estado" | "antiguedad" | "territorio";
-type ModoToque = "marcar" | "consultar" | "seleccionar";
+type ModoToque = "marcar" | "consultar" | "seleccionar" | "editarForma";
 
 // Misma paleta validada que las gráficas (daltonismo y contraste sobre blanco).
 const COLOR_ESTADO: Record<string, string> = {
@@ -31,6 +31,7 @@ const TOQUES: { clave: ModoToque; nombre: string; ayuda: string }[] = [
   { clave: "marcar", nombre: "Marcar", ayuda: "Toca una cuadra para marcarla trabajada hoy. Vuelve a tocarla para deshacer." },
   { clave: "consultar", nombre: "Consultar", ayuda: "Toca una cuadra para ver su historial y sus notas." },
   { clave: "seleccionar", nombre: "Seleccionar", ayuda: "Toca varias cuadras para marcarlas o anunciarlas juntas." },
+  { clave: "editarForma", nombre: "Editar forma", ayuda: "Toca una cuadra y arrastra sus vértices para corregir su forma. Toca un vértice para quitarlo, o el punto de en medio de un lado para agregar uno." },
 ];
 
 export function VistaMapa() {
@@ -41,6 +42,7 @@ export function VistaMapa() {
   const [zona, setZona] = useState("");
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
   const [detalle, setDetalle] = useState<string | null>(null);
+  const [editandoForma, setEditandoForma] = useState<string | null>(null);
   const [miUbicacion, setMiUbicacion] = useState<LatLng | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [centrarEn, setCentrarEn] = useState<LatLng[] | null>(null);
@@ -89,6 +91,7 @@ export function VistaMapa() {
     (v: VistaCuadra) => {
       if (toque === "marcar") return marcarAlternando(v);
       if (toque === "consultar") return setDetalle(v.cuadra.id);
+      if (toque === "editarForma") return setEditandoForma(v.cuadra.id);
       setSeleccion((prev) => {
         const s = new Set(prev);
         if (s.has(v.cuadra.id)) s.delete(v.cuadra.id);
@@ -104,6 +107,7 @@ export function VistaMapa() {
     .filter((v): v is VistaCuadra => Boolean(v));
 
   const vistaDetalle = detalle ? indice.cuadras.get(detalle) ?? null : null;
+  const vistaEditando = editandoForma ? indice.cuadras.get(editandoForma) ?? null : null;
 
   const marcadores = useMemo(() => {
     const lista: { latlng: LatLng; titulo: string; tipo: "reunion" | "yo" }[] = db.puntosReunion
@@ -140,6 +144,8 @@ export function VistaMapa() {
         capa={capa}
         marcadores={marcadores}
         centrarEn={centrarEn}
+        editando={toque === "editarForma" ? editandoForma : null}
+        onEditarVertices={(cuadraId, anillo) => acciones.guardarFormaCuadra(cuadraId, anillo)}
       />
 
       <div className="mapa-superior no-imprimir">
@@ -153,6 +159,7 @@ export function VistaMapa() {
                 setToque(t.clave);
                 if (t.clave !== "seleccionar") setSeleccion(new Set());
                 if (t.clave !== "consultar") setDetalle(null);
+                if (t.clave !== "editarForma") setEditandoForma(null);
               }}
             >
               {t.nombre}
@@ -235,6 +242,38 @@ export function VistaMapa() {
               onClick={() => void compartirTexto(textoAnuncio(hoy(), "Territorio", elegidas))}
             >
               Anunciar
+            </button>
+          </footer>
+        </aside>
+      )}
+
+      {vistaEditando && (
+        <aside className="panel-lateral">
+          <header>
+            <h3 className="crece">{vistaEditando.territorio.nombre} · {vistaEditando.cuadra.letra}</h3>
+            <button className="btn fantasma" onClick={() => setEditandoForma(null)} aria-label="Cerrar">✕</button>
+          </header>
+          <div className="cuerpo">
+            <p className="chico suave" style={{ margin: 0 }}>
+              Arrastra los puntos rojos para corregir la forma. Toca un punto para quitarlo, o el punto tenue de
+              en medio de un lado para agregar uno nuevo.
+            </p>
+            <p className="chico suave" style={{ margin: 0 }}>
+              Superficie: <strong>{areaTexto(vistaEditando.cuadra.areaM2)}</strong>
+              {db.geometriaEditada[vistaEditando.cuadra.id] && " · forma corregida"}
+            </p>
+          </div>
+          <footer>
+            <button
+              className="btn peligro crece"
+              disabled={!db.geometriaEditada[vistaEditando.cuadra.id]}
+              onClick={() => {
+                if (confirmar("¿Deshacer la forma corregida de esta cuadra y volver a la del mapa base?")) {
+                  acciones.restablecerFormaCuadra(vistaEditando.cuadra.id);
+                }
+              }}
+            >
+              Deshacer forma
             </button>
           </footer>
         </aside>

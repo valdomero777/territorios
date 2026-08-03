@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PuertaAcceso } from "./components/PuertaAcceso";
 import { ProveedorApp, useApp } from "./hooks/useApp";
 import { VistaHoy } from "./views/VistaHoy";
 import { VistaMapa } from "./views/VistaMapa";
@@ -75,9 +76,11 @@ export default function App() {
   // blanco, sin siquiera el menú para llegar a Ajustes.
   return (
     <LimiteError zona="la aplicación" raiz>
-      <ProveedorApp>
-        <Interfaz />
-      </ProveedorApp>
+      <PuertaAcceso>
+        <ProveedorApp>
+          <Interfaz />
+        </ProveedorApp>
+      </PuertaAcceso>
     </LimiteError>
   );
 }

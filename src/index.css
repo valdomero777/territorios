@@ -300,6 +300,21 @@ dialog.modal footer { border-top: 1px solid var(--borde); justify-content: flex-
   box-shadow: 0 0 0 3px rgb(42 120 214 / 0.35), 0 1px 4px rgb(15 23 42 / 0.4);
 }
 
+.vertice-editor {
+  background: #d03b3b;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgb(15 23 42 / 0.5);
+  cursor: grab;
+}
+
+.vertice-medio {
+  background: rgb(208 59 59 / 0.55);
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  cursor: copy;
+}
+
 .mapa-superior {
   position: absolute;
   top: 10px;

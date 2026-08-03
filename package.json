@@ -11,7 +11,10 @@
   },
   "dependencies": {
     "@types/leaflet": "^1.9.21",
+    "firebase": "^12.17.0",
     "leaflet": "^1.9.4",
+    "polygon-clipping": "^0.15.7",
+    "polygon-offset": "^0.3.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

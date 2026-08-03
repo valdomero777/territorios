@@ -220,6 +220,12 @@ export interface BaseDatos {
   asignaciones: AsignacionTerritorio[];
   eventos: EventoEspecial[];
   ciclos: Ciclo[];
+  /**
+   * Borrador de forma corregida a mano por cuadra (id → anillo de vértices),
+   * mientras no se exporte un `mapa.json` nuevo con la corrección incorporada.
+   * Gana sobre la geometría del mapa base (ver `domain/db.ts`).
+   */
+  geometriaEditada: Record<string, LatLng[]>;
 }
 
 /* ---------------------------------------------------------------- mapa base */

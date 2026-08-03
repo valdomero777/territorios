@@ -53,11 +53,13 @@ De ahí salen el resto de las reglas:
 - **Hoy** — la pantalla de operación diaria: el capitán del rol de hoy, dónde se quedaron la
   última vez y la continuación sugerida con distancias reales, lista para anunciar o para
   registrar directo.
-- **Mapa** — sobre calles reales o satélite, con el territorio delimitado en rojo. Tres modos de
+- **Mapa** — sobre calles reales o satélite, con el territorio delimitado en rojo. Cuatro modos de
   toque:
   - **Marcar** (predeterminado): un toque marca la cuadra como trabajada hoy, otro lo deshace.
   - **Consultar**: abre historial, notas, "Cómo llegar" y "Marcar todo el territorio".
   - **Seleccionar**: varias cuadras a la vez para marcarlas o anunciarlas juntas.
+  - **Editar forma**: corrige a mano los vértices de una cuadra cuando el límite dibujado no
+    coincide con la calle real (ver "Corregir la forma de una cuadra a mano" más abajo).
 
   Además: coloreado por estado / antigüedad / territorio, filtro por zona, puntos de reunión
   marcados y botón **Dónde estoy** (GPS) para ubicarse en la calle.
@@ -143,13 +145,45 @@ blanco y todo lo demás sigue funcionando igual.
 
 ## Dónde viven los datos
 
-Hoy en el navegador de cada dispositivo (`localStorage`), y se comparten exportando el respaldo
-JSON desde Ajustes.
+Toda la app habla con la interfaz `Repo` de [`src/data/repo.ts`](src/data/repo.ts), que tiene dos
+implementaciones intercambiables — `crearRepo()` elige una sola línea:
 
-Toda la app habla con la interfaz `Repo` de [`src/data/repo.ts`](src/data/repo.ts). Para pasar a
-registro compartido en vivo hay que escribir un `repoFirebase.ts` que cumpla ese mismo contrato
-(`cargar` / `guardar` / `suscribir`) y cambiar una línea en `crearRepo()`. **Ningún componente
-cambia.**
+- **`repoLocal.ts`** — en el navegador de cada dispositivo (`localStorage`); se comparte
+  exportando el respaldo JSON desde Ajustes. Es lo que se usa si no hay Firebase configurado.
+- **`repoFirebase.ts`** — registro compartido en vivo (Firestore): todos los que entren con la
+  clave del grupo ven y editan el mismo dato, en el momento. Se activa solo con tener las
+  variables `VITE_FIREBASE_*` configuradas.
+
+### Modo compartido (Firebase)
+
+No hay cuentas por persona. Hay **una sola cuenta** de Firebase Authentication (correo/contraseña)
+en todo el proyecto, y su contraseña es la clave que se reparte con el grupo — al abrir el sitio
+pide esa clave una vez por navegador (`src/components/PuertaAcceso.tsx`) y ya. Las reglas de
+Firestore (`firestore.rules`, se pega en Firebase Console → Firestore Database → Reglas) exigen
+sesión iniciada; como es la única cuenta que existe, entrar con la clave correcta es la única
+forma de entrar.
+
+Los datos se guardan por colección, no en un solo documento (`congregacion/estado`,
+`congregacion/registros/{id}`, `congregacion/personas/{id}`, `congregacion/asignaciones/{id}`,
+`congregacion/jornadas/{id}`, `congregacion/geometria/{cuadraId}`) — así la bitácora puede crecer
+sin toparse con el límite de 1 MB por documento de Firestore, y dos personas guardando a la vez
+no se pisan porque tocan documentos distintos. La geometría del mapa **no** se sincroniza (sigue
+viviendo en `src/data/mapa.json`, igual para todos); solo lo editable (nombre, zona, notas,
+acarreo, formas corregidas a mano) viaja por Firestore.
+
+**Para activarlo:**
+1. Firebase Console → Authentication → Sign-in method → habilitar Correo/contraseña.
+2. Authentication → Users → Add user → el correo y la clave del grupo.
+3. Firestore Database → crear la base (si no existe) → pegar `firestore.rules` en la pestaña Reglas.
+4. Copiar `.env.local.example` a `.env.local` y llenar los valores (Firebase Console →
+   Configuración del proyecto → tus apps → app web → Config del SDK) para `npm run dev`.
+5. Para el sitio publicado: dar de alta los mismos valores como *secrets* en el **environment
+   "prod"** del repositorio (Settings → Environments → prod → Environment secrets) —
+   `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, `FIREBASE_APP_ID`,
+   `FIREBASE_SHARED_EMAIL`. Tienen que quedar ahí y no en "Repository secrets": los secrets de un
+   *environment* solo los ve un job que declare ese environment, y por eso el job `construir` de
+   `deploy.yml` trae `environment: prod`. Si le pusiste protecciones al environment (revisores
+   requeridos, espera), el build se va a detener a esperar esa aprobación antes de compilar.
 
 ## Regenerar el mapa
 
@@ -172,6 +206,21 @@ en el territorio 5, y la segunda se renombró a `J`.
 `origen` que no cambia aunque se mueva de territorio; al arrancar, la app conserva lo que editaste
 (nombres, zonas, bajas, notas, reorganizaciones) y refresca solamente la geometría, incorporando
 las cuadras nuevas que traiga la revisión.
+
+### Corregir la forma de una cuadra a mano
+
+Para un ajuste puntual (el límite no coincide con la calle real, cambió una calle) no hace falta
+repetir el pipeline completo del PDF: **Mapa → modo "Editar forma"** deja tocar una cuadra y
+arrastrar sus vértices directamente sobre el mapa real — tocar un vértice lo quita, tocar el punto
+tenue de en medio de un lado agrega uno nuevo. El cambio se ve al instante en toda la app (mapa,
+minimapas, superficie), pero vive solo en este dispositivo hasta que se exporta.
+
+Cuando ya está bien: **Ajustes → Geometría corregida a mano → Exportar mapa.json actualizado**
+descarga un `mapa.json` con esas cuadras corregidas y el contorno rojo y el área total
+recalculados (la misma unión de polígonos que hace `generar_geo.py` con `shapely`, aquí con la
+librería `polygon-clipping` en el navegador). Se copia a `src/data/mapa.json`, se hace
+`npm run build`/se despliega, y en Ajustes se usa "Limpiar borrador" — ya quedó incorporado a la
+geometría base para todos.
 
 ## Mapa base (revisión 04/26)
 

@@ -42,11 +42,15 @@ export interface PropsMapaReal {
   /** Si se define, un clic en cualquier parte devuelve la coordenada. */
   onClicMapa?: (latlng: LatLng) => void;
   centrarEn?: LatLng[] | null;
+  /** Id de la cuadra en edición de forma: muestra sus vértices arrastrables. */
+  editando?: string | null;
+  /** Se llama con el anillo completo cada vez que cambia (arrastre, alta, baja). */
+  onEditarVertices?: (cuadraId: string, anillo: LatLng[]) => void;
 }
 
 export function MapaReal({
   vistas, color, seleccion, onCuadra, foco, capa, verNumeros = true,
-  marcadores = [], onClicMapa, centrarEn,
+  marcadores = [], onClicMapa, centrarEn, editando = null, onEditarVertices,
 }: PropsMapaReal) {
   const contenedor = useRef<HTMLDivElement>(null);
   const mapa = useRef<L.Map | null>(null);
@@ -54,9 +58,12 @@ export function MapaReal({
   const capaCuadras = useRef<L.LayerGroup | null>(null);
   const capaNumeros = useRef<L.LayerGroup | null>(null);
   const capaMarcadores = useRef<L.LayerGroup | null>(null);
+  const capaVertices = useRef<L.LayerGroup | null>(null);
   const poligonos = useRef(new Map<string, L.Polygon>());
   const alClic = useRef(onCuadra);
   alClic.current = onCuadra;
+  const alEditarVertices = useRef(onEditarVertices);
+  alEditarVertices.current = onEditarVertices;
 
   /* --------------------------------------------------------------- montaje */
   useEffect(() => {
@@ -91,6 +98,7 @@ export function MapaReal({
     capaCuadras.current = L.layerGroup().addTo(m);
     capaNumeros.current = L.layerGroup().addTo(m);
     capaMarcadores.current = L.layerGroup().addTo(m);
+    capaVertices.current = L.layerGroup().addTo(m);
 
     const registro = poligonos.current;
     return () => {
@@ -192,6 +200,83 @@ export function MapaReal({
         .addTo(grupo);
     }
   }, [marcadores]);
+
+  /* ------------------------------------------------------- vértices editables */
+  useEffect(() => {
+    const grupo = capaVertices.current;
+    if (!grupo) return;
+    grupo.clearLayers();
+    if (!editando) return;
+    const v = vistas.find((x) => x.cuadra.id === editando);
+    const poligono = poligonos.current.get(editando);
+    if (!v || !poligono) return;
+
+    // El anillo guardado viene cerrado (primer punto repetido al final); se
+    // edita "abierto" (sin el duplicado) para no tener dos marcadores atados
+    // al mismo vértice, y se vuelve a cerrar solo al guardar/dibujar.
+    const cerrado = v.cuadra.latlng;
+    const mismoPunto = (a: LatLng, b: LatLng) => a[0] === b[0] && a[1] === b[1];
+    let anillo =
+      cerrado.length > 1 && mismoPunto(cerrado[0], cerrado[cerrado.length - 1])
+        ? cerrado.slice(0, -1)
+        : cerrado.slice();
+
+    const redibujar = () => {
+      const cerrar = [...anillo, anillo[0]];
+      poligono.setLatLngs(cerrar as L.LatLngExpression[]);
+      grupo.clearLayers();
+
+      anillo.forEach((punto, i) => {
+        let arrastrando = false;
+        const marcador = L.marker(punto as L.LatLngExpression, {
+          draggable: true,
+          icon: L.divIcon({ className: "vertice-editor", iconSize: [16, 16], iconAnchor: [8, 8] }),
+        });
+        marcador.on("dragstart", () => {
+          arrastrando = true;
+        });
+        marcador.on("drag", (e) => {
+          const p = (e.target as L.Marker).getLatLng();
+          anillo[i] = [p.lat, p.lng];
+          poligono.setLatLngs([...anillo, anillo[0]] as L.LatLngExpression[]);
+        });
+        marcador.on("dragend", (e) => {
+          const p = (e.target as L.Marker).getLatLng();
+          anillo[i] = [p.lat, p.lng];
+          alEditarVertices.current?.(editando, [...anillo, anillo[0]]);
+        });
+        marcador.on("click", () => {
+          if (arrastrando) {
+            arrastrando = false;
+            return;
+          }
+          if (anillo.length <= 3) return; // un polígono necesita al menos 3 vértices
+          anillo = anillo.filter((_, j) => j !== i);
+          alEditarVertices.current?.(editando, [...anillo, anillo[0]]);
+          redibujar();
+        });
+        marcador.addTo(grupo);
+      });
+
+      // Puntos medios: un clic inserta un vértice nuevo ahí.
+      for (let i = 0; i < anillo.length; i++) {
+        const a = anillo[i];
+        const b = anillo[(i + 1) % anillo.length];
+        const medio: LatLng = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        const marcadorMedio = L.marker(medio as L.LatLngExpression, {
+          icon: L.divIcon({ className: "vertice-medio", iconSize: [10, 10], iconAnchor: [5, 5] }),
+        });
+        marcadorMedio.on("click", () => {
+          anillo = [...anillo.slice(0, i + 1), medio, ...anillo.slice(i + 1)];
+          alEditarVertices.current?.(editando, [...anillo, anillo[0]]);
+          redibujar();
+        });
+        marcadorMedio.addTo(grupo);
+      }
+    };
+
+    redibujar();
+  }, [editando, vistas]);
 
   /* ----------------------------------------------------------- clic general */
   useEffect(() => {

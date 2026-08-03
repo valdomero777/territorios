@@ -47,3 +47,41 @@ export function enlaceMapas([lat, lng]: LatLng): string {
 export function enlaceRuta([lat, lng]: LatLng): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
 }
+
+/**
+ * Área y centroide de un anillo [lat,lng], proyectando a metros locales
+ * (equirectangular, mismo radio que `distanciaM`) y aplicando la fórmula del
+ * área de polígono (shoelace) sobre esa proyección. Suficiente para el
+ * tamaño de una cuadra; no pretende igualar la precisión de una librería GIS.
+ */
+export function areaYCentroide(anillo: LatLng[]): { areaM2: number; centro: LatLng } {
+  if (anillo.length < 3) return { areaM2: 0, centro: anillo[0] ?? [0, 0] };
+  const lat0 = anillo.reduce((s, [la]) => s + la, 0) / anillo.length;
+  const lon0 = anillo.reduce((s, [, lo]) => s + lo, 0) / anillo.length;
+  const cosLat0 = Math.cos((lat0 * Math.PI) / 180);
+  const puntos = anillo.map(([la, lo]) => [
+    R * ((lo - lon0) * Math.PI) / 180 * cosLat0,
+    R * ((la - lat0) * Math.PI) / 180,
+  ]);
+
+  let area2 = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < puntos.length; i++) {
+    const [x0, y0] = puntos[i];
+    const [x1, y1] = puntos[(i + 1) % puntos.length];
+    const cruz = x0 * y1 - x1 * y0;
+    area2 += cruz;
+    cx += (x0 + x1) * cruz;
+    cy += (y0 + y1) * cruz;
+  }
+  const areaM2 = Math.abs(area2) / 2;
+  if (areaM2 === 0) {
+    const [la, lo] = anillo[0];
+    return { areaM2: 0, centro: [la, lo] };
+  }
+  cx /= 3 * area2;
+  cy /= 3 * area2;
+  const centro: LatLng = [lat0 + (cy * 180) / (Math.PI * R), lon0 + (cx * 180) / (Math.PI * R * cosLat0)];
+  return { areaM2, centro };
+}

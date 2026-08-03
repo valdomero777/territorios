@@ -1,6 +1,9 @@
 import { useRef } from "react";
+import { cerrarSesion } from "../components/PuertaAcceso";
 import { Chip, confirmar } from "../components/ui";
+import { CONFIGURADO } from "../data/firebase";
 import { fechaLarga, hoy } from "../domain/fechas";
+import { mapaActualizado } from "../domain/geometriaExportar";
 import { mapaBase } from "../domain/mapa";
 import type { BaseDatos, PoliticaCiclo } from "../domain/tipos";
 import { useApp } from "../hooks/useApp";
@@ -55,6 +58,17 @@ export function VistaAjustes() {
     } catch {
       alert("No se pudo leer el archivo: no parece un respaldo válido.");
     }
+  };
+
+  const exportarMapa = () => {
+    const actualizado = mapaActualizado(db.geometriaEditada);
+    const blob = new Blob([JSON.stringify(actualizado)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "mapa_editado.json";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -250,13 +264,17 @@ export function VistaAjustes() {
       <section className="tarjeta rejilla" style={{ gap: 12 }}>
         <h3>Respaldo y sincronización</h3>
         <p className="chico suave" style={{ margin: 0 }}>
-          Guardado actual: <Chip>{repoNombre}</Chip> Los datos viven en este navegador. Para
-          compartir el avance con los auxiliares hoy, exporta el respaldo y pásalo; cuando conectes
-          Firebase la sincronización será automática y este paso desaparece.
+          Guardado actual: <Chip>{repoNombre}</Chip>{" "}
+          {CONFIGURADO
+            ? "Los datos se comparten en vivo entre todos los que entren con la clave del grupo. El respaldo sigue sirviendo como copia de seguridad aparte."
+            : "Los datos viven en este navegador. Para compartir el avance con los auxiliares hoy, exporta el respaldo y pásalo."}
         </p>
         <div className="fila">
           <button className="btn primario" onClick={exportar}>Exportar respaldo</button>
           <button className="btn" onClick={() => archivo.current?.click()}>Importar respaldo</button>
+          {CONFIGURADO && (
+            <button className="btn" onClick={() => void cerrarSesion()}>Cerrar sesión</button>
+          )}
           <input
             ref={archivo}
             type="file"
@@ -273,6 +291,31 @@ export function VistaAjustes() {
           {db.registros.length} registros · {db.jornadas.length} jornadas · {db.personas.length} personas
         </div>
       </section>
+
+      {Object.keys(db.geometriaEditada).length > 0 && (
+        <section className="tarjeta rejilla" style={{ gap: 12 }}>
+          <h3>Geometría corregida a mano</h3>
+          <p className="chico suave" style={{ margin: 0 }}>
+            {Object.keys(db.geometriaEditada).length} cuadra(s) con la forma corregida en Mapa →
+            Editar forma. Ese cambio vive solo en este dispositivo hasta que exportes el mapa
+            actualizado y reemplaces <code>src/data/mapa.json</code> en el proyecto (y se despliegue
+            de nuevo) — ahí se vuelve la geometría oficial para todos.
+          </p>
+          <div className="fila">
+            <button className="btn primario" onClick={exportarMapa}>Exportar mapa.json actualizado</button>
+            <button
+              className="btn"
+              onClick={() => {
+                if (confirmar("¿Vaciar el borrador de forma corregida? Úsalo solo después de reemplazar y desplegar el mapa.json exportado.")) {
+                  acciones.limpiarBorradorGeometria();
+                }
+              }}
+            >
+              Limpiar borrador
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="tarjeta rejilla" style={{ gap: 12, borderColor: "#fecaca" }}>
         <h3>Zona de riesgo</h3>

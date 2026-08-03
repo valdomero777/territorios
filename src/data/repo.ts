@@ -23,8 +23,10 @@ export interface Repo {
   suscribir(cb: (db: BaseDatos) => void): () => void;
 }
 
+import { CONFIGURADO } from "./firebase";
+import { RepoFirebase } from "./repoFirebase";
 import { RepoLocal } from "./repoLocal";
 
 export function crearRepo(): Repo {
-  return new RepoLocal();
+  return CONFIGURADO ? new RepoFirebase() : new RepoLocal();
 }
