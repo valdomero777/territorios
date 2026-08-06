@@ -326,7 +326,12 @@ dialog.modal footer { border-top: 1px solid var(--borde); justify-content: flex-
   flex-direction: column;
   gap: 6px;
   align-items: flex-start;
+  /* El contenedor ocupa todo el ancho del mapa para poder alinear filas a la
+     izquierda, pero no debe tapar los clics sobre el mapa en el espacio vacío
+     a su derecha: solo sus hijos (los controles) deben capturar el puntero. */
+  pointer-events: none;
 }
+.mapa-superior > * { pointer-events: auto; }
 .mapa-superior .btn,
 .mapa-superior .segmentado { box-shadow: var(--sombra); }
 

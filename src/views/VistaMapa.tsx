@@ -5,12 +5,12 @@ import { PALETA } from "../components/graficas";
 import { BarraAvance, Chip, confirmar } from "../components/ui";
 import { compartirTexto, textoAnuncio } from "../domain/anuncio";
 import { GEO, areaTexto, enlaceRuta } from "../domain/mapa";
-import { fechaCorta, haceTexto, hoy } from "../domain/fechas";
+import { fechaCorta, fechaLarga, haceTexto, hoy } from "../domain/fechas";
 import type { VistaCuadra } from "../domain/estado";
-import type { LatLng } from "../domain/tipos";
+import type { Fecha, LatLng } from "../domain/tipos";
 import { useApp } from "../hooks/useApp";
 
-type ModoColor = "estado" | "antiguedad" | "territorio";
+type ModoColor = "estado" | "antiguedad" | "territorio" | "fecha";
 type ModoToque = "marcar" | "consultar" | "seleccionar" | "editarForma";
 
 // Misma paleta validada que las gráficas (daltonismo y contraste sobre blanco).
@@ -28,7 +28,7 @@ const COLOR_ANTIGUEDAD: Record<string, string> = {
 };
 
 const TOQUES: { clave: ModoToque; nombre: string; ayuda: string }[] = [
-  { clave: "marcar", nombre: "Marcar", ayuda: "Toca una cuadra para marcarla trabajada hoy. Vuelve a tocarla para deshacer." },
+  { clave: "marcar", nombre: "Marcar", ayuda: "Toca una cuadra para marcarla trabajada en la fecha elegida abajo. Vuelve a tocarla para deshacer." },
   { clave: "consultar", nombre: "Consultar", ayuda: "Toca una cuadra para ver su historial y sus notas." },
   { clave: "seleccionar", nombre: "Seleccionar", ayuda: "Toca varias cuadras para marcarlas o anunciarlas juntas." },
   { clave: "editarForma", nombre: "Editar forma", ayuda: "Toca una cuadra y arrastra sus vértices para corregir su forma. Toca un vértice para quitarlo, o el punto de en medio de un lado para agregar uno." },
@@ -57,34 +57,70 @@ export function VistaMapa() {
     [zona, db.territorios],
   );
 
+  /**
+   * Fecha y encargado a los que se atribuye el registro al marcar. No siempre
+   * es hoy: se olvida marcar y se pone al corriente después, así que hace
+   * falta poder capturarlo con la fecha real en que se trabajó.
+   */
+  const [fecha, setFecha] = useState<Fecha>(hoy());
+  const [capitanId, setCapitanId] = useState<string>("");
+
   const color = useCallback(
     (v: VistaCuadra) => {
       if (modo === "territorio") return v.territorio.color;
       if (modo === "antiguedad") return COLOR_ANTIGUEDAD[v.antiguedad];
+      if (modo === "fecha") return v.historial.some((r) => r.fecha === fecha) ? PALETA.bueno : "#e6e4df";
       return COLOR_ESTADO[v.estado];
     },
-    [modo],
+    [modo, fecha],
   );
 
-  /** Capitán de la jornada de hoy, para que el registro quede con nombre. */
-  const capitanDeHoy = useMemo(() => {
-    const j = db.jornadas.find((x) => x.fecha === hoy() && x.capitanId);
-    return j?.capitanId ?? undefined;
-  }, [db.jornadas]);
+  /** Salidas del rol ese día: puede haber mañana y tarde, cada una con su encargado. */
+  const jornadasDia = useMemo(
+    () =>
+      db.jornadas
+        .filter((j) => j.fecha === fecha && j.capitanId)
+        .map((j) => ({
+          capitanId: j.capitanId!,
+          etiqueta: `${db.config.modalidades.find((m) => m.id === j.modalidadId)?.nombre ?? j.modalidadId} — ${
+            db.personas.find((p) => p.id === j.capitanId)?.nombre ?? "—"
+          }`,
+        })),
+    [db.jornadas, db.config.modalidades, db.personas, fecha],
+  );
+
+  const otrasPersonas = useMemo(
+    () =>
+      db.personas
+        .filter((p) => p.activo && !jornadasDia.some((j) => j.capitanId === p.id))
+        .sort((a, b) => a.nombre.localeCompare(b.nombre, "es")),
+    [db.personas, jornadasDia],
+  );
+
+  const elegirFecha = (nueva: Fecha) => {
+    setFecha(nueva);
+    const delDia = db.jornadas.filter((j) => j.fecha === nueva && j.capitanId);
+    setCapitanId(delDia.length === 1 ? (delDia[0].capitanId ?? "") : "");
+  };
+
+  const cuadrasDeFecha = useMemo(
+    () => indice.todas.filter((v) => v.historial.some((r) => r.fecha === fecha)),
+    [indice, fecha],
+  );
 
   const marcarAlternando = useCallback(
     (v: VistaCuadra) => {
-      const deHoy = v.historial.find((r) => r.fecha === hoy());
-      if (deHoy) {
-        acciones.eliminarRegistro(deHoy.id);
-        setAviso(`${v.cuadra.id}: registro de hoy deshecho`);
+      const deEseDia = v.historial.find((r) => r.fecha === fecha);
+      if (deEseDia) {
+        acciones.eliminarRegistro(deEseDia.id);
+        setAviso(`${v.cuadra.id}: registro del ${fechaCorta(fecha)} deshecho`);
       } else {
-        acciones.registrarTrabajo([v.cuadra.id], { fecha: hoy(), capitanId: capitanDeHoy });
-        setAviso(`${v.cuadra.id} marcada como trabajada hoy`);
+        acciones.registrarTrabajo([v.cuadra.id], { fecha, capitanId: capitanId || undefined });
+        setAviso(`${v.cuadra.id} marcada como trabajada el ${fechaCorta(fecha)}`);
       }
       window.setTimeout(() => setAviso(null), 2200);
     },
-    [acciones, capitanDeHoy],
+    [acciones, fecha, capitanId],
   );
 
   const alTocar = useCallback(
@@ -166,11 +202,54 @@ export function VistaMapa() {
             </button>
           ))}
         </div>
+
+        <div className="fila" style={{ gap: 6, flexWrap: "wrap" }}>
+          <label className="fila chico suave" style={{ gap: 4 }}>
+            Fecha
+            <input
+              type="date"
+              className="btn chico"
+              value={fecha}
+              max={hoy()}
+              onChange={(e) => elegirFecha(e.target.value)}
+              aria-label="Fecha del registro"
+            />
+          </label>
+          {(toque === "marcar" || toque === "seleccionar") && (
+            <select
+              className="btn chico"
+              value={capitanId}
+              onChange={(e) => setCapitanId(e.target.value)}
+              aria-label="Encargado a cuyo nombre queda el registro"
+            >
+              <option value="">Sin encargado</option>
+              {jornadasDia.length > 0 && (
+                <optgroup label="Rol de ese día">
+                  {jornadasDia.map((j) => (
+                    <option key={j.capitanId} value={j.capitanId}>{j.etiqueta}</option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="Otro hermano">
+                {otrasPersonas.map((p) => (
+                  <option key={p.id} value={p.id}>{p.nombre}</option>
+                ))}
+              </optgroup>
+            </select>
+          )}
+          {fecha !== hoy() && (toque === "marcar" || toque === "seleccionar") && (
+            <span className="chico" style={{ color: PALETA.aviso }}>
+              Marcando para el {fechaLarga(fecha)}, no hoy
+            </span>
+          )}
+        </div>
+
         <div className="fila" style={{ gap: 6 }}>
           <select className="btn chico" value={modo} onChange={(e) => setModo(e.target.value as ModoColor)} aria-label="Cómo colorear">
             <option value="estado">Estado</option>
             <option value="antiguedad">Antigüedad</option>
             <option value="territorio">Territorios</option>
+            <option value="fecha">Por fecha</option>
           </select>
           <select className="btn chico" value={capa} onChange={(e) => setCapa(e.target.value as CapaFondo)} aria-label="Fondo del mapa">
             {CAPAS.map((c) => (
@@ -185,6 +264,14 @@ export function VistaMapa() {
           <button className="btn chico" onClick={() => setCentrarEn([GEO.limites[0], GEO.limites[1]])} title="Ver todo el territorio">⤢</button>
         </div>
         <p className="ayuda-toque">{TOQUES.find((t) => t.clave === toque)?.ayuda}</p>
+        {modo === "fecha" && (
+          <p className="chico suave" style={{ margin: "2px 0 0" }}>
+            {cuadrasDeFecha.length} cuadras trabajadas el {fechaLarga(fecha)}
+            {cuadrasDeFecha.length > 0 &&
+              ` en ${new Set(cuadrasDeFecha.map((v) => v.territorio.id)).size} territorios`}
+            .
+          </p>
+        )}
       </div>
 
       <div className="mapa-leyenda no-imprimir">
@@ -196,6 +283,11 @@ export function VistaMapa() {
             <div className="fila-leyenda"><i style={{ background: COLOR_ANTIGUEDAD.medio }} /> Hasta {db.config.umbralMedio} días</div>
             <div className="fila-leyenda"><i style={{ background: COLOR_ANTIGUEDAD.viejo }} /> Más de {db.config.umbralMedio} días</div>
             <div className="fila-leyenda"><i style={{ background: COLOR_ANTIGUEDAD.nunca }} /> Nunca registrada</div>
+          </>
+        ) : modo === "fecha" ? (
+          <>
+            <div className="fila-leyenda"><i style={{ background: PALETA.bueno }} /> Trabajada el {fechaCorta(fecha)}</div>
+            <div className="fila-leyenda"><i style={{ background: "#e6e4df" }} /> No trabajada ese día</div>
           </>
         ) : (
           <>
@@ -231,15 +323,15 @@ export function VistaMapa() {
             <button
               className="btn primario crece"
               onClick={() => {
-                acciones.registrarTrabajo(elegidas.map((v) => v.cuadra.id), { fecha: hoy(), capitanId: capitanDeHoy });
+                acciones.registrarTrabajo(elegidas.map((v) => v.cuadra.id), { fecha, capitanId: capitanId || undefined });
                 setSeleccion(new Set());
               }}
             >
-              Marcar trabajadas hoy
+              Marcar trabajadas el {fechaCorta(fecha)}
             </button>
             <button
               className="btn"
-              onClick={() => void compartirTexto(textoAnuncio(hoy(), "Territorio", elegidas))}
+              onClick={() => void compartirTexto(textoAnuncio(fecha, "Territorio", elegidas))}
             >
               Anunciar
             </button>
@@ -286,11 +378,13 @@ export function VistaMapa() {
             <button className="btn fantasma" onClick={() => setDetalle(null)} aria-label="Cerrar">✕</button>
           </header>
           <div className="cuerpo">
-            <Detalle v={vistaDetalle} />
+            <Detalle v={vistaDetalle} fecha={fecha} capitanId={capitanId} />
           </div>
           <footer>
             <button className="btn primario crece" onClick={() => marcarAlternando(vistaDetalle)}>
-              {vistaDetalle.historial.some((r) => r.fecha === hoy()) ? "Deshacer registro de hoy" : "Marcar trabajada hoy"}
+              {vistaDetalle.historial.some((r) => r.fecha === fecha)
+                ? `Deshacer registro del ${fechaCorta(fecha)}`
+                : `Marcar trabajada el ${fechaCorta(fecha)}`}
             </button>
             <a
               className="btn"
@@ -308,7 +402,7 @@ export function VistaMapa() {
   );
 }
 
-function Detalle({ v }: { v: VistaCuadra }) {
+function Detalle({ v, fecha, capitanId }: { v: VistaCuadra; fecha: Fecha; capitanId: string }) {
   const { db, resumenes, acciones } = useApp();
   const capitan = (id?: string) => db.personas.find((c) => c.id === id)?.nombre ?? "sin capitán";
   const resumen = resumenes.find((r) => r.territorio.id === v.territorio.id);
@@ -350,8 +444,8 @@ function Detalle({ v }: { v: VistaCuadra }) {
               const pendientes = (db.territorios.find((t) => t.id === v.territorio.id)?.cuadras ?? [])
                 .filter((c) => c.activa)
                 .map((c) => c.id);
-              if (confirmar(`¿Marcar las ${pendientes.length} cuadras de ${v.territorio.nombre} como trabajadas hoy?`)) {
-                acciones.registrarTrabajo(pendientes, { fecha: hoy() });
+              if (confirmar(`¿Marcar las ${pendientes.length} cuadras de ${v.territorio.nombre} como trabajadas el ${fechaCorta(fecha)}?`)) {
+                acciones.registrarTrabajo(pendientes, { fecha, capitanId: capitanId || undefined });
               }
             }}
           >
