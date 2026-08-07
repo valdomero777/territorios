@@ -125,7 +125,6 @@ export function VistaMapa() {
 
   const alTocar = useCallback(
     (v: VistaCuadra) => {
-      console.log("[diag] alTocar", v.cuadra.id, "toque:", toque);
       if (toque === "marcar") return marcarAlternando(v);
       if (toque === "consultar") return setDetalle(v.cuadra.id);
       if (toque === "editarForma") return setEditandoForma(v.cuadra.id);
@@ -144,7 +143,6 @@ export function VistaMapa() {
     .filter((v): v is VistaCuadra => Boolean(v));
 
   const vistaDetalle = detalle ? indice.cuadras.get(detalle) ?? null : null;
-  console.log("[diag] detalle:", detalle, "vistaDetalle:", vistaDetalle, "indice.cuadras.size:", indice.cuadras.size);
   const vistaEditando = editandoForma ? indice.cuadras.get(editandoForma) ?? null : null;
 
   const marcadores = useMemo(() => {

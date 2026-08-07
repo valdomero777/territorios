@@ -143,7 +143,6 @@ export function MapaReal({
       });
       p.bindTooltip(`${v.territorio.nombre} · ${v.cuadra.letra}`, { sticky: true });
       p.on("click", (e) => {
-        console.log("[diag] clic en cuadra", v.cuadra.id, "hayOnCuadra:", !!alClic.current);
         L.DomEvent.stopPropagation(e);
         alClic.current?.(v);
       });
