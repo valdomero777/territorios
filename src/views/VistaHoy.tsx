@@ -41,7 +41,10 @@ export function VistaHoy() {
   const seleccionadas = sugeridas.filter((v) => elegidas.has(v.cuadra.id));
   const aUsar = seleccionadas.length ? seleccionadas : sugeridas;
 
-  const idsUltima = new Set(ultima?.cuadras.map((v) => v.cuadra.id) ?? []);
+  // La bitácora puede tener trabajo de otros días (se marcó tarde o se puso al
+  // corriente un atraso), así que "hoy" solo cuenta lo que de verdad es de hoy.
+  const ultimaEsHoy = ultima?.fecha === hoy();
+  const idsUltima = new Set(ultimaEsHoy ? ultima!.cuadras.map((v) => v.cuadra.id) : []);
   const idsSugeridas = new Set(sugeridas.map((v) => v.cuadra.id));
 
   const colorMini = (v: VistaCuadra) => {
@@ -52,7 +55,7 @@ export function VistaHoy() {
   };
 
   const centro: LatLng[] = [
-    ...(ultima?.cuadras ?? []).map((v) => v.cuadra.centroLatLng),
+    ...(ultimaEsHoy ? ultima!.cuadras : []).map((v) => v.cuadra.centroLatLng),
     ...sugeridas.map((v) => v.cuadra.centroLatLng),
   ];
 
@@ -84,15 +87,20 @@ export function VistaHoy() {
         )}
       </section>
 
-      {/* ------------------------------------------------------- última salida */}
+      {/* --------------------------------------------------------- hoy mismo */}
       <section className="tarjeta">
-        <h3>Dónde se quedaron</h3>
+        <h3>Trabajado hoy</h3>
         {!ultima ? (
           <Vacio>Todavía no hay trabajo registrado. La primera asignación puede ser cualquier territorio.</Vacio>
+        ) : !ultimaEsHoy ? (
+          <Vacio>
+            Todavía no se ha marcado nada hoy. La última salida fue el {fechaLarga(ultima.fecha)} (
+            {haceTexto(diasEntre(ultima.fecha))}).
+          </Vacio>
         ) : (
           <>
             <p className="chico suave" style={{ margin: "4px 0 10px" }}>
-              {fechaLarga(ultima.fecha)} ({haceTexto(diasEntre(ultima.fecha))}) · {ultima.cuadras.length} cuadras ·{" "}
+              {ultima.cuadras.length} cuadras ·{" "}
               {ultima.capitanes
                 .map((id) => db.personas.find((c) => c.id === id)?.nombre)
                 .filter(Boolean)
@@ -227,7 +235,7 @@ export function VistaHoy() {
         </div>
         <div className="fila chico suave" style={{ padding: "8px 12px", gap: 14 }}>
           <span className="fila" style={{ gap: 5 }}>
-            <i style={{ width: 10, height: 10, borderRadius: 3, background: PALETA.bueno }} /> Última salida
+            <i style={{ width: 10, height: 10, borderRadius: 3, background: PALETA.bueno }} /> Trabajado hoy
           </span>
           <span className="fila" style={{ gap: 5 }}>
             <i style={{ width: 10, height: 10, borderRadius: 3, background: PALETA.aviso }} /> Continuación sugerida

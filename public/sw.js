@@ -112,7 +112,7 @@ self.addEventListener("fetch", (e) => {
 
   if (req.mode === "navigate") {
     e.respondWith(
-      fetch(req)
+      fetch(req, { cache: "no-cache" })
         .then((res) => {
           const copia = res.clone();
           caches.open(CACHE).then((c) => c.put(SHELL, copia));

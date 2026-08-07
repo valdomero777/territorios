@@ -2,13 +2,52 @@ import { useMemo } from "react";
 import { BarraApilada, BarrasHorizontales, Columnas, Leyenda, PALETA } from "../components/graficas";
 import { BarraAvance, Metrica, Vacio } from "../components/ui";
 import type { Dato } from "../components/graficas";
-import { diasEntre, fechaLarga, haceTexto, hoy, sumarDias } from "../domain/fechas";
+import { diasEntre, fechaCorta, fechaLarga, haceTexto, hoy, sumarDias } from "../domain/fechas";
 import { useApp } from "../hooks/useApp";
 
 const SEMANAS = 12;
 
 export function VistaMetricas() {
   const { db, indice, resumenes, global, ciclo } = useApp();
+
+  /* Semana actual y semana anterior, para comparar de un vistazo qué se
+     trabajó recién contra lo que se trabajó la semana que le precede. */
+  const semanaActual = useMemo(() => {
+    const fin = hoy();
+    return { inicio: sumarDias(fin, -6), fin };
+  }, []);
+  const semanaAnterior = useMemo(() => {
+    const fin = sumarDias(semanaActual.inicio, -1);
+    return { inicio: sumarDias(fin, -6), fin };
+  }, [semanaActual]);
+
+  const porTerritorioSemanas = useMemo(() => {
+    const m = new Map<number, { actual: number; anterior: number }>();
+    for (const r of db.registros) {
+      const v = indice.cuadras.get(r.cuadraId);
+      if (!v) continue;
+      const enActual = r.fecha >= semanaActual.inicio && r.fecha <= semanaActual.fin;
+      const enAnterior = r.fecha >= semanaAnterior.inicio && r.fecha <= semanaAnterior.fin;
+      if (!enActual && !enAnterior) continue;
+      const entrada = m.get(v.territorio.id) ?? { actual: 0, anterior: 0 };
+      if (enActual) entrada.actual += 1;
+      else entrada.anterior += 1;
+      m.set(v.territorio.id, entrada);
+    }
+    return db.territorios
+      .map((t) => ({ territorio: t, ...(m.get(t.id) ?? { actual: 0, anterior: 0 }) }))
+      .filter((f) => f.actual > 0 || f.anterior > 0)
+      .sort((a, b) => b.actual - a.actual || b.anterior - a.anterior || a.territorio.id - b.territorio.id);
+  }, [db.registros, db.territorios, indice, semanaActual, semanaAnterior]);
+
+  const totalSemanas = useMemo(
+    () =>
+      porTerritorioSemanas.reduce(
+        (s, f) => ({ actual: s.actual + f.actual, anterior: s.anterior + f.anterior }),
+        { actual: 0, anterior: 0 },
+      ),
+    [porTerritorioSemanas],
+  );
 
   /* Ritmo: cuadras registradas por semana, últimas 12 semanas. */
   const semanas = useMemo(() => {
@@ -113,6 +152,52 @@ export function VistaMetricas() {
   return (
     <div className="rejilla" style={{ gap: 16 }}>
       <h2>Métricas</h2>
+
+      <section className="tarjeta">
+        <h3>Semana anterior vs. semana actual</h3>
+        <p className="chico suave" style={{ margin: "2px 0 10px" }}>
+          Semana anterior: {fechaCorta(semanaAnterior.inicio)} al {fechaCorta(semanaAnterior.fin)} · Semana actual:{" "}
+          {fechaCorta(semanaActual.inicio)} al {fechaCorta(semanaActual.fin)}.
+        </p>
+        {porTerritorioSemanas.length === 0 ? (
+          <Vacio>Sin cuadras registradas en estas dos semanas.</Vacio>
+        ) : (
+          <div className="desplaza">
+            <table className="tabla">
+              <thead>
+                <tr>
+                  <th>Territorio</th>
+                  <th>Zona</th>
+                  <th style={{ textAlign: "right" }}>Semana anterior</th>
+                  <th style={{ textAlign: "right" }}>Semana actual</th>
+                </tr>
+              </thead>
+              <tbody>
+                {porTerritorioSemanas.map((f) => (
+                  <tr key={f.territorio.id}>
+                    <td>
+                      <span className="fila" style={{ gap: 6 }}>
+                        <i style={{ width: 10, height: 10, borderRadius: 3, background: f.territorio.color }} />
+                        <strong>{f.territorio.nombre}</strong>
+                      </span>
+                    </td>
+                    <td className="chico suave">{f.territorio.zona}</td>
+                    <td className="mono" style={{ textAlign: "right" }}>{f.anterior || "—"}</td>
+                    <td className="mono" style={{ textAlign: "right" }}>{f.actual || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={2}><strong>Total</strong></td>
+                  <td className="mono" style={{ textAlign: "right" }}><strong>{totalSemanas.anterior}</strong></td>
+                  <td className="mono" style={{ textAlign: "right" }}><strong>{totalSemanas.actual}</strong></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </section>
 
       <div className="rejilla auto">
         <Metrica
