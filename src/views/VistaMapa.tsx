@@ -125,6 +125,7 @@ export function VistaMapa() {
 
   const alTocar = useCallback(
     (v: VistaCuadra) => {
+      console.log("[diag] alTocar", v.cuadra.id, "toque:", toque);
       if (toque === "marcar") return marcarAlternando(v);
       if (toque === "consultar") return setDetalle(v.cuadra.id);
       if (toque === "editarForma") return setEditandoForma(v.cuadra.id);

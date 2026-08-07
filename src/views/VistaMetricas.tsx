@@ -2,51 +2,82 @@ import { useMemo } from "react";
 import { BarraApilada, BarrasHorizontales, Columnas, Leyenda, PALETA } from "../components/graficas";
 import { BarraAvance, Metrica, Vacio } from "../components/ui";
 import type { Dato } from "../components/graficas";
-import { diasEntre, fechaCorta, fechaLarga, haceTexto, hoy, sumarDias } from "../domain/fechas";
+import { diasEntre, diaSemana, fechaCorta, fechaLarga, haceTexto, hoy, sumarDias } from "../domain/fechas";
+import type { Fecha, Territorio } from "../domain/tipos";
 import { useApp } from "../hooks/useApp";
+import type { Indice } from "../domain/estado";
+import type { BaseDatos } from "../domain/tipos";
 
 const SEMANAS = 12;
+
+/** Los 6 días de una semana de servicio, de martes a domingo. */
+function diasDeSemana(inicio: Fecha): Fecha[] {
+  return Array.from({ length: 6 }, (_, i) => sumarDias(inicio, i));
+}
+
+interface TrabajoTerritorioDia {
+  territorio: Territorio;
+  letras: string[];
+  terminado: boolean;
+}
+
+/** Qué territorios y cuadras se trabajaron cada día de la semana que empieza en `inicio`. */
+function desglosePorDia(
+  db: BaseDatos,
+  indice: Indice,
+  inicio: Fecha,
+): { fecha: Fecha; territorios: TrabajoTerritorioDia[] }[] {
+  return diasDeSemana(inicio).map((fecha) => {
+    const porTerritorio = new Map<number, Set<string>>();
+    for (const r of db.registros) {
+      if (r.fecha !== fecha) continue;
+      const v = indice.cuadras.get(r.cuadraId);
+      if (!v) continue;
+      const letras = porTerritorio.get(v.territorio.id) ?? new Set<string>();
+      letras.add(v.cuadra.letra);
+      porTerritorio.set(v.territorio.id, letras);
+    }
+    const territorios = [...porTerritorio.entries()]
+      .map(([territorioId, letras]): TrabajoTerritorioDia => {
+        const territorio = db.territorios.find((t) => t.id === territorioId)!;
+        const activas = territorio.cuadras.filter((c) => c.activa);
+        const terminado =
+          activas.length > 0 &&
+          activas.every((c) => indice.cuadras.get(c.id)?.historial.some((r) => r.fecha <= fecha) ?? false);
+        return {
+          territorio,
+          letras: [...letras].sort((a, b) => a.localeCompare(b, "es", { numeric: true })),
+          terminado,
+        };
+      })
+      .sort((a, b) => a.territorio.id - b.territorio.id);
+    return { fecha, territorios };
+  });
+}
 
 export function VistaMetricas() {
   const { db, indice, resumenes, global, ciclo } = useApp();
 
-  /* Semana actual y semana anterior, para comparar de un vistazo qué se
-     trabajó recién contra lo que se trabajó la semana que le precede. */
+  /* Semana de servicio: siempre de martes a domingo, sin importar qué día es
+     hoy. La actual es la que contiene a hoy; la anterior, la que le precede. */
   const semanaActual = useMemo(() => {
-    const fin = hoy();
-    return { inicio: sumarDias(fin, -6), fin };
+    const hoyF = hoy();
+    const diasDesdeMartes = (diaSemana(hoyF) - 2 + 7) % 7;
+    const inicio = sumarDias(hoyF, -diasDesdeMartes);
+    return { inicio, fin: sumarDias(inicio, 5) };
   }, []);
   const semanaAnterior = useMemo(() => {
-    const fin = sumarDias(semanaActual.inicio, -1);
-    return { inicio: sumarDias(fin, -6), fin };
+    const inicio = sumarDias(semanaActual.inicio, -7);
+    return { inicio, fin: sumarDias(inicio, 5) };
   }, [semanaActual]);
 
-  const porTerritorioSemanas = useMemo(() => {
-    const m = new Map<number, { actual: number; anterior: number }>();
-    for (const r of db.registros) {
-      const v = indice.cuadras.get(r.cuadraId);
-      if (!v) continue;
-      const enActual = r.fecha >= semanaActual.inicio && r.fecha <= semanaActual.fin;
-      const enAnterior = r.fecha >= semanaAnterior.inicio && r.fecha <= semanaAnterior.fin;
-      if (!enActual && !enAnterior) continue;
-      const entrada = m.get(v.territorio.id) ?? { actual: 0, anterior: 0 };
-      if (enActual) entrada.actual += 1;
-      else entrada.anterior += 1;
-      m.set(v.territorio.id, entrada);
-    }
-    return db.territorios
-      .map((t) => ({ territorio: t, ...(m.get(t.id) ?? { actual: 0, anterior: 0 }) }))
-      .filter((f) => f.actual > 0 || f.anterior > 0)
-      .sort((a, b) => b.actual - a.actual || b.anterior - a.anterior || a.territorio.id - b.territorio.id);
-  }, [db.registros, db.territorios, indice, semanaActual, semanaAnterior]);
-
-  const totalSemanas = useMemo(
-    () =>
-      porTerritorioSemanas.reduce(
-        (s, f) => ({ actual: s.actual + f.actual, anterior: s.anterior + f.anterior }),
-        { actual: 0, anterior: 0 },
-      ),
-    [porTerritorioSemanas],
+  const desgloseActual = useMemo(
+    () => desglosePorDia(db, indice, semanaActual.inicio),
+    [db, indice, semanaActual],
+  );
+  const desgloseAnterior = useMemo(
+    () => desglosePorDia(db, indice, semanaAnterior.inicio),
+    [db, indice, semanaAnterior],
   );
 
   /* Ritmo: cuadras registradas por semana, últimas 12 semanas. */
@@ -153,51 +184,18 @@ export function VistaMetricas() {
     <div className="rejilla" style={{ gap: 16 }}>
       <h2>Métricas</h2>
 
-      <section className="tarjeta">
-        <h3>Semana anterior vs. semana actual</h3>
-        <p className="chico suave" style={{ margin: "2px 0 10px" }}>
-          Semana anterior: {fechaCorta(semanaAnterior.inicio)} al {fechaCorta(semanaAnterior.fin)} · Semana actual:{" "}
-          {fechaCorta(semanaActual.inicio)} al {fechaCorta(semanaActual.fin)}.
-        </p>
-        {porTerritorioSemanas.length === 0 ? (
-          <Vacio>Sin cuadras registradas en estas dos semanas.</Vacio>
-        ) : (
-          <div className="desplaza">
-            <table className="tabla">
-              <thead>
-                <tr>
-                  <th>Territorio</th>
-                  <th>Zona</th>
-                  <th style={{ textAlign: "right" }}>Semana anterior</th>
-                  <th style={{ textAlign: "right" }}>Semana actual</th>
-                </tr>
-              </thead>
-              <tbody>
-                {porTerritorioSemanas.map((f) => (
-                  <tr key={f.territorio.id}>
-                    <td>
-                      <span className="fila" style={{ gap: 6 }}>
-                        <i style={{ width: 10, height: 10, borderRadius: 3, background: f.territorio.color }} />
-                        <strong>{f.territorio.nombre}</strong>
-                      </span>
-                    </td>
-                    <td className="chico suave">{f.territorio.zona}</td>
-                    <td className="mono" style={{ textAlign: "right" }}>{f.anterior || "—"}</td>
-                    <td className="mono" style={{ textAlign: "right" }}>{f.actual || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colSpan={2}><strong>Total</strong></td>
-                  <td className="mono" style={{ textAlign: "right" }}><strong>{totalSemanas.anterior}</strong></td>
-                  <td className="mono" style={{ textAlign: "right" }}><strong>{totalSemanas.actual}</strong></td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
-      </section>
+      <div className="rejilla dos">
+        <TablaSemana
+          titulo="Semana anterior"
+          rango={semanaAnterior}
+          dias={desgloseAnterior}
+        />
+        <TablaSemana
+          titulo="Semana actual"
+          rango={semanaActual}
+          dias={desgloseActual}
+        />
+      </div>
 
       <div className="rejilla auto">
         <Metrica
@@ -332,5 +330,65 @@ export function VistaMetricas() {
         </div>
       </section>
     </div>
+  );
+}
+
+function TablaSemana({
+  titulo,
+  rango,
+  dias,
+}: {
+  titulo: string;
+  rango: { inicio: Fecha; fin: Fecha };
+  dias: { fecha: Fecha; territorios: TrabajoTerritorioDia[] }[];
+}) {
+  const total = dias.reduce((s, d) => s + d.territorios.reduce((s2, t) => s2 + (t.terminado ? 1 : t.letras.length), 0), 0);
+  return (
+    <section className="tarjeta">
+      <h3>{titulo}</h3>
+      <p className="chico suave" style={{ margin: "2px 0 10px" }}>
+        {fechaCorta(rango.inicio)} al {fechaCorta(rango.fin)}.
+      </p>
+      {total === 0 ? (
+        <Vacio>Sin cuadras registradas esta semana.</Vacio>
+      ) : (
+        <div className="desplaza">
+          <table className="tabla">
+            <thead>
+              <tr>
+                <th style={{ width: 90 }}>Día</th>
+                <th>Territorios y cuadras trabajadas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dias.map((d) => (
+                <tr key={d.fecha}>
+                  <td className="mono chico">{fechaCorta(d.fecha)}</td>
+                  <td>
+                    {d.territorios.length === 0 ? (
+                      <span className="chico suave">—</span>
+                    ) : (
+                      <div className="rejilla" style={{ gap: 4 }}>
+                        {d.territorios.map((t) => (
+                          <span key={t.territorio.id} className="fila chico" style={{ gap: 6, flexWrap: "wrap" }}>
+                            <i style={{ width: 9, height: 9, borderRadius: 3, background: t.territorio.color, flex: "0 0 auto" }} />
+                            <strong>{t.territorio.nombre}</strong>
+                            {t.terminado ? (
+                              <span className="suave">· territorio completo</span>
+                            ) : (
+                              <span className="suave">: {t.letras.join(", ")}</span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
