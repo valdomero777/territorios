@@ -21,6 +21,13 @@ export interface Repo {
    * Devuelve una función para cancelar la suscripción.
    */
   suscribir(cb: (db: BaseDatos) => void): () => void;
+  /**
+   * Avisa cuando guardar en la nube deja de funcionar (cuota agotada, sin
+   * conexión con el servidor, etc.) y cuando se recupera. Los repos que
+   * siempre guardan localmente (como `RepoLocal`) no necesitan implementarlo:
+   * por omisión se asume que todo va bien.
+   */
+  estadoNube?(cb: (fallando: boolean) => void): () => void;
 }
 
 import { CONFIGURADO } from "./firebase";

@@ -25,7 +25,7 @@ const PESTANAS: { clave: Vista; nombre: string }[] = [
 ];
 
 function Interfaz() {
-  const { db, global, ciclo } = useApp();
+  const { db, global, ciclo, nubeFallando } = useApp();
   const [vista, setVista] = useState<Vista>("hoy");
 
   return (
@@ -42,6 +42,14 @@ function Interfaz() {
           <BarraAvance valor={global.avance} />
         </div>
       </div>
+
+      {nubeFallando && (
+        <div className="aviso-nube">
+          ⚠ La nube no está respondiendo ahora mismo (puede ser la cuota de Firebase). Tus cambios se
+          siguen guardando en este dispositivo y se sincronizarán solos en cuanto se recupere — mientras
+          tanto, exporta un respaldo en Ajustes si vas a cambiar de dispositivo.
+        </div>
+      )}
 
       <nav className="nav">
         {PESTANAS.map((p) => (

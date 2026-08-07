@@ -74,6 +74,9 @@ interface AppCtx {
   global: ResumenGlobal;
   ciclo: Ciclo | null;
   repoNombre: string;
+  /** `true` si la nube dejó de responder (cuota agotada, sin señal…) y los
+   *  cambios están quedando solo en este dispositivo por ahora. */
+  nubeFallando: boolean;
   acciones: Acciones;
 }
 
@@ -83,6 +86,16 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
   const repo = useMemo(() => crearRepo(), []);
   const [db, setDb] = useState<BaseDatos | null>(null);
   const dbRef = useRef<BaseDatos | null>(null);
+  const [nubeFallando, setNubeFallando] = useState(false);
+  const nubeFallandoRef = useRef(false);
+
+  useEffect(() => {
+    if (!repo.estadoNube) return;
+    return repo.estadoNube((fallando) => {
+      nubeFallandoRef.current = fallando;
+      setNubeFallando(fallando);
+    });
+  }, [repo]);
 
   useEffect(() => {
     let vivo = true;
@@ -112,6 +125,11 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
       void repo.guardar(inicial);
     });
     const cancelar = repo.suscribir((remota) => {
+      // Mientras la nube está fallando, lo que llegue aquí puede ser la copia
+      // vieja de antes de la falla (Firestore la sirve de su caché local sin
+      // avisar que está corriendo atrás) — aplicarla pisaría cambios que ya
+      // se hicieron en este dispositivo y que solo viven en el respaldo local.
+      if (nubeFallandoRef.current) return;
       const m = migrar(remota);
       dbRef.current = m;
       setDb(m);
@@ -514,9 +532,10 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
       global: resumenGlobal(indice, resumenes),
       ciclo: cicloAbierto(db),
       repoNombre: repo.nombre,
+      nubeFallando,
       acciones,
     };
-  }, [db, acciones, repo]);
+  }, [db, acciones, repo, nubeFallando]);
 
   if (!valor) {
     return <div className="cargando">Cargando el territorio…</div>;

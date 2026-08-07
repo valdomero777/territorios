@@ -88,6 +88,16 @@ h3 { font-size: 0.95rem; }
 .barra .marca { display: flex; flex-direction: column; margin-right: auto; }
 .barra .marca small { color: var(--texto-suave); font-size: 0.72rem; }
 
+.aviso-nube {
+  padding: 8px 14px;
+  background: #fef3c7;
+  color: #92400e;
+  border-bottom: 1px solid #fde68a;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: center;
+}
+
 /* Se envuelve en varias líneas en lugar de desplazarse: en el celular, un menú
    con scroll horizontal esconde las últimas pestañas sin ningún aviso visible. */
 .nav {

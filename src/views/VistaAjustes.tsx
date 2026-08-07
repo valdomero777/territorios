@@ -30,7 +30,7 @@ const POLITICAS: { clave: PoliticaCiclo; nombre: string; detalle: string }[] = [
 ];
 
 export function VistaAjustes() {
-  const { db, ciclo, global, acciones, repoNombre } = useApp();
+  const { db, ciclo, global, acciones, repoNombre, nubeFallando } = useApp();
   const archivo = useRef<HTMLInputElement>(null);
 
   const exportar = () => {
@@ -265,10 +265,19 @@ export function VistaAjustes() {
         <h3>Respaldo y sincronización</h3>
         <p className="chico suave" style={{ margin: 0 }}>
           Guardado actual: <Chip>{repoNombre}</Chip>{" "}
+          {nubeFallando && <Chip color="#b45309">nube caída, guardando local</Chip>}{" "}
           {CONFIGURADO
             ? "Los datos se comparten en vivo entre todos los que entren con la clave del grupo. El respaldo sigue sirviendo como copia de seguridad aparte."
             : "Los datos viven en este navegador. Para compartir el avance con los auxiliares hoy, exporta el respaldo y pásalo."}
         </p>
+        {nubeFallando && (
+          <p className="chico" style={{ margin: 0, color: "#92400e" }}>
+            La nube no responde ahora mismo (probablemente la cuota gratuita de Firebase se agotó por
+            hoy). Nada se pierde: los cambios se están guardando en este dispositivo y se sincronizarán
+            solos en cuanto se recupere. Si vas a usar otro dispositivo mientras tanto, exporta un
+            respaldo aquí primero.
+          </p>
+        )}
         <div className="fila">
           <button className="btn primario" onClick={exportar}>Exportar respaldo</button>
           <button className="btn" onClick={() => archivo.current?.click()}>Importar respaldo</button>

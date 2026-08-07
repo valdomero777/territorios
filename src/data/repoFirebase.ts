@@ -4,6 +4,7 @@ import {
 import type { DocumentData, Unsubscribe, WriteBatch } from "firebase/firestore";
 import { db } from "./firebase";
 import type { Repo } from "./repo";
+import { RepoLocal } from "./repoLocal";
 import type {
   AsignacionTerritorio, BaseDatos, Ciclo, Config, EventoEspecial, Jornada,
   LatLng, Persona, PuntoReunion, Registro, Territorio,
@@ -142,7 +143,41 @@ export class RepoFirebase implements Repo {
   private cacheGeometria = new Map<string, { id: string; anillo: LatLng[] }>();
   private ultimoEstadoTexto: string | null = null;
 
+  // Plan B: si la nube falla (cuota agotada, sin señal con el servidor…),
+  // no hay razón para que el capitán pierda lo que acaba de registrar en la
+  // calle. Todo cambio se guarda también aquí, y si `guardar()` a Firestore
+  // truena, esta copia queda como la única fuente de verdad hasta que la
+  // nube se recupere (entonces el próximo `guardar()` que sí funcione la
+  // vuelve a poner al día).
+  private respaldo = new RepoLocal();
+  private fallando = false;
+  private oyentesEstado = new Set<(fallando: boolean) => void>();
+
+  private avisarEstado(fallando: boolean) {
+    if (this.fallando === fallando) return;
+    this.fallando = fallando;
+    for (const cb of this.oyentesEstado) cb(fallando);
+  }
+
+  estadoNube(cb: (fallando: boolean) => void): () => void {
+    this.oyentesEstado.add(cb);
+    cb(this.fallando);
+    return () => this.oyentesEstado.delete(cb);
+  }
+
   async cargar(): Promise<BaseDatos | null> {
+    try {
+      const resultado = await this.cargarDeFirestore();
+      this.avisarEstado(false);
+      return resultado;
+    } catch (e) {
+      console.error("No se pudo cargar de Firebase; se usa el respaldo local.", e);
+      this.avisarEstado(true);
+      return this.respaldo.cargar();
+    }
+  }
+
+  private async cargarDeFirestore(): Promise<BaseDatos | null> {
     if (!db) return null;
     const estadoSnap = await getDoc(docEstado());
     if (!estadoSnap.exists()) return null;
@@ -194,6 +229,38 @@ export class RepoFirebase implements Repo {
   }
 
   async guardar(base: BaseDatos): Promise<void> {
+    if (!db) return;
+    // Respaldo local primero: si todo lo de abajo falla, ya quedó a salvo.
+    void this.respaldo.guardar(base);
+
+    // Instantánea de refs y cachés: `sincronizarColeccion` los va actualizando
+    // como si el envío ya hubiera funcionado (para no recalcular el diff dos
+    // veces). Si el envío de verdad falla, se restauran, así el próximo
+    // intento vuelve a incluir exactamente lo que no se guardó.
+    const snapshot = {
+      refPersonas: this.refPersonas, refRegistros: this.refRegistros,
+      refAsignaciones: this.refAsignaciones, refJornadas: this.refJornadas,
+      refTerritorios: this.refTerritorios, refGeometria: this.refGeometria,
+      refConfig: this.refConfig, refCiclos: this.refCiclos,
+      refEventos: this.refEventos, refPuntosReunion: this.refPuntosReunion,
+      ultimoEstadoTexto: this.ultimoEstadoTexto,
+      cachePersonas: new Map(this.cachePersonas),
+      cacheRegistros: new Map(this.cacheRegistros),
+      cacheAsignaciones: new Map(this.cacheAsignaciones),
+      cacheJornadas: new Map(this.cacheJornadas),
+      cacheGeometria: new Map(this.cacheGeometria),
+    };
+    try {
+      await this.guardarEnFirestore(base);
+      this.avisarEstado(false);
+    } catch (e) {
+      console.error("No se pudo guardar en Firebase; queda solo el respaldo local por ahora.", e);
+      Object.assign(this, snapshot);
+      this.avisarEstado(true);
+    }
+  }
+
+  private async guardarEnFirestore(base: BaseDatos): Promise<void> {
     if (!db) return;
     const operaciones: (() => void)[] = [];
     const lotes: WriteBatch[] = [];
@@ -247,10 +314,9 @@ export class RepoFirebase implements Repo {
         territorios: overlayDeTerritorios(base.territorios),
       };
       const texto = JSON.stringify(estado);
+      let escribirEstado: Promise<void> | null = null;
       if (texto !== this.ultimoEstadoTexto) {
-        operaciones.push(() => {
-          void setDoc(docEstado(), estado);
-        });
+        escribirEstado = setDoc(docEstado(), estado);
         this.ultimoEstadoTexto = texto;
       }
       this.refConfig = base.config;
@@ -258,6 +324,10 @@ export class RepoFirebase implements Repo {
       this.refEventos = base.eventos;
       this.refPuntosReunion = base.puntosReunion;
       this.refTerritorios = base.territorios;
+
+      for (const op of operaciones) op();
+      await Promise.all([...lotes.map((l) => l.commit()), escribirEstado].filter(Boolean));
+      return;
     }
 
     if (!operaciones.length) return;
@@ -279,7 +349,14 @@ export class RepoFirebase implements Repo {
     const emitir = () => {
       if (!estado || !Object.values(listos).every(Boolean)) return;
       this.actualizarCache(estado, personas, registros, asignaciones, jornadas, geometriaEditada);
+      this.avisarEstado(false);
       cb(ensamblar(estado, personas, registros, asignaciones, jornadas, geometriaEditada));
+    };
+    // Si un listener truena (misma cuota agotada, por ejemplo), al menos que
+    // se sepa: no queda forma de reintentarlo solo, pero sí de avisar.
+    const alFallar = (e: unknown) => {
+      console.error("Un listener de Firebase falló; los cambios en vivo de otros dispositivos dejan de llegar.", e);
+      this.avisarEstado(true);
     };
 
     const suscripciones: Unsubscribe[] = [
@@ -287,34 +364,34 @@ export class RepoFirebase implements Repo {
         if (snap.exists()) estado = snap.data() as Estado;
         listos.estado = true;
         emitir();
-      }),
+      }, alFallar),
       onSnapshot(colEn("personas"), (snap) => {
         personas = snap.docs.map((d) => d.data() as Persona);
         listos.personas = true;
         emitir();
-      }),
+      }, alFallar),
       onSnapshot(colEn("registros"), (snap) => {
         registros = snap.docs.map((d) => d.data() as Registro);
         listos.registros = true;
         emitir();
-      }),
+      }, alFallar),
       onSnapshot(colEn("asignaciones"), (snap) => {
         asignaciones = snap.docs.map((d) => d.data() as AsignacionTerritorio);
         listos.asignaciones = true;
         emitir();
-      }),
+      }, alFallar),
       onSnapshot(colEn("jornadas"), (snap) => {
         jornadas = snap.docs.map((d) => d.data() as Jornada);
         listos.jornadas = true;
         emitir();
-      }),
+      }, alFallar),
       onSnapshot(colEn("geometria"), (snap) => {
         geometriaEditada = Object.fromEntries(
           snap.docs.map((d) => [d.id, (d.data() as { anillo: LatLng[] }).anillo]),
         );
         listos.geometria = true;
         emitir();
-      }),
+      }, alFallar),
     ];
 
     return () => suscripciones.forEach((u) => u());
