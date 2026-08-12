@@ -310,6 +310,18 @@ dialog.modal footer { border-top: 1px solid var(--borde); justify-content: flex-
   box-shadow: 0 0 0 3px rgb(42 120 214 / 0.35), 0 1px 4px rgb(15 23 42 / 0.4);
 }
 
+.marca-marcada {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: #d03b3b;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgb(15 23 42 / 0.4);
+}
+
 .vertice-editor {
   background: #d03b3b;
   border: 2px solid #fff;

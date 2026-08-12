@@ -1,7 +1,7 @@
 import { areaYCentroide, mapaBase } from "./mapa";
 import { hoy } from "./fechas";
 import { MODALIDADES_POR_DEFECTO } from "./tipos";
-import type { BaseDatos, Config, Cuadra, Jornada, LatLng, Persona, Territorio } from "./tipos";
+import type { BaseDatos, CasaMarcada, Config, Cuadra, Jornada, LatLng, Persona, Territorio } from "./tipos";
 
 export const VERSION_BD = 1;
 
@@ -55,6 +55,65 @@ export function territoriosIniciales(): Territorio[] {
   }));
 }
 
+/**
+ * Semilla del catálogo de "casas marcadas" (no visitar), tomada del control en
+ * papel de la congregación ("Casas Marcadas 2026.pdf"). Las fechas venían como
+ * "?" en varias filas: quedan sin capturar (`undefined`), no se inventan.
+ */
+export function casasMarcadasIniciales(): CasaMarcada[] {
+  const filas: [number, string, string | null][] = [
+    [1, "Aurora Boreal 203", "2025-01-26"],
+    [4, "Av. Las Nubes 227", "2017-10-28"],
+    [4, "Av. Las Nubes 229", "2017-10-28"],
+    [4, "Nacarada 219", "2017-10-07"],
+    [4, "Av. Las Nubes 203", "2024-01-26"],
+    [6, "Privada Gema 103", "2016-06-01"],
+    [11, "Valle Dorado 329", "2017-01-29"],
+    [13, "Armenia 106", "2018-02-01"],
+    [14, "Abisinia 130", null],
+    [14, "Asiria 121", null],
+    [15, "Sexta 112", null],
+    [15, "16 de Septiembre 116", null],
+    [17, "Rembrandt 226", "2016-09-11"],
+    [17, "Rembrandt 229", "2016-09-11"],
+    [17, "Tiziano 230", "2017-05-09"],
+    [17, "Tiziano 226", "2017-05-09"],
+    [17, "Leonardo Da Vinci 129", "2017-05-09"],
+    [18, "Nicolas Hernandez 125", "2018-11-23"],
+    [18, "Manuel Medina 149", "2018-11-23"],
+    [18, "Lorenzo Avalos 105", "2019-09-26"],
+    [19, "German Gedovius 140", "2016-12-17"],
+    [20, "Agustin Castro 149", "2018-12-21"],
+    [20, "Agustin Castro 171", "2018-12-21"],
+    [21, "El Llano 206", null],
+    [21, "El Llano 218", null],
+    [21, "Pradera 324", null],
+    [22, "Torneros 300", "2018-09-01"],
+    [22, "Fogoneros 106", "2018-09-01"],
+    [23, "San Jose 101", null],
+    [24, "Calixto Contreras 154", "2016-09-02"],
+    [24, "Torneros 123", "2016-09-02"],
+    [24, "Torneros 117", "2018-09-21"],
+    [24, "Severino Ceniceros 140", "2018-09-21"],
+    [25, "Blas Corral 110", "2017-04-01"],
+    [25, "Severino Ceniceros 116", "2018-10-01"],
+    [27, "Miguel Laveaga 206", null],
+    [27, "Donato Guerra 223", "2017-01-04"],
+    [27, "Doroteo Arango 132", "2018-04-01"],
+    [28, "Enrique R. Najera 227", "2018-04-01"],
+    [28, "Doroteo Arango 212", null],
+    [30, "Jose Vasconcelos 161", "2017-04-28"],
+    [36, "Calle Huerto 111, Jardines del Real", "2026-04-14"],
+  ];
+  return filas.map(([territorioId, direccion, fechaInicial]) => ({
+    id: nuevoId("casa"),
+    territorioId,
+    direccion,
+    fechaInicial: fechaInicial ?? undefined,
+    activa: true,
+  }));
+}
+
 export function baseInicial(): BaseDatos {
   const inicio = hoy();
   return {
@@ -63,6 +122,7 @@ export function baseInicial(): BaseDatos {
     territorios: territoriosIniciales(),
     personas: [],
     puntosReunion: [],
+    casasMarcadas: casasMarcadasIniciales(),
     jornadas: [],
     registros: [],
     asignaciones: [],
@@ -204,6 +264,7 @@ export function migrar(db: BaseDatos): BaseDatos {
     },
     territorios: aplicarGeometriaEditada(territorios, geometriaEditada),
     personas,
+    casasMarcadas: db.casasMarcadas ?? base.casasMarcadas,
     jornadas,
     asignaciones: db.asignaciones ?? [],
     eventos: db.eventos ?? [],

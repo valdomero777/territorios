@@ -4,14 +4,14 @@ import type { CapaFondo } from "../components/MapaReal";
 import { PALETA } from "../components/graficas";
 import { BarraAvance, Chip, confirmar } from "../components/ui";
 import { compartirTexto, textoAnuncio } from "../domain/anuncio";
-import { GEO, areaTexto, enlaceRuta } from "../domain/mapa";
+import { GEO, areaTexto, areaYCentroide, enlaceRuta, esCuadraDelMapaBase } from "../domain/mapa";
 import { fechaCorta, fechaLarga, haceTexto, hoy } from "../domain/fechas";
 import type { VistaCuadra } from "../domain/estado";
 import type { Fecha, LatLng } from "../domain/tipos";
 import { useApp } from "../hooks/useApp";
 
 type ModoColor = "estado" | "antiguedad" | "territorio" | "fecha";
-type ModoToque = "marcar" | "consultar" | "seleccionar" | "editarForma";
+type ModoToque = "marcar" | "consultar" | "seleccionar" | "editarForma" | "agregarCuadra";
 
 // Misma paleta validada que las gráficas (daltonismo y contraste sobre blanco).
 const COLOR_ESTADO: Record<string, string> = {
@@ -32,6 +32,7 @@ const TOQUES: { clave: ModoToque; nombre: string; ayuda: string }[] = [
   { clave: "consultar", nombre: "Consultar", ayuda: "Toca una cuadra para ver su historial y sus notas." },
   { clave: "seleccionar", nombre: "Seleccionar", ayuda: "Toca varias cuadras para marcarlas o anunciarlas juntas." },
   { clave: "editarForma", nombre: "Editar forma", ayuda: "Toca una cuadra y arrastra sus vértices para corregir su forma. Toca un vértice para quitarlo, o el punto de en medio de un lado para agregar uno." },
+  { clave: "agregarCuadra", nombre: "Agregar cuadra", ayuda: "Toca puntos vacíos del mapa (no sobre otra cuadra) para dibujar el contorno de una cuadra nueva. Con 3 puntos o más, elige el territorio abajo y guarda." },
 ];
 
 export function VistaMapa() {
@@ -43,9 +44,15 @@ export function VistaMapa() {
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
   const [detalle, setDetalle] = useState<string | null>(null);
   const [editandoForma, setEditandoForma] = useState<string | null>(null);
+  const [puntosNuevos, setPuntosNuevos] = useState<LatLng[]>([]);
+  const [territorioNuevo, setTerritorioNuevo] = useState<number | "">("");
+  const [letraNueva, setLetraNueva] = useState("");
   const [miUbicacion, setMiUbicacion] = useState<LatLng | null>(null);
+  const [verMarcadas, setVerMarcadas] = useState(true);
   const [aviso, setAviso] = useState<string | null>(null);
   const [centrarEn, setCentrarEn] = useState<LatLng[] | null>(null);
+  const [puntoTocado, setPuntoTocado] = useState<string | null>(null);
+  const [reubicandoPunto, setReubicandoPunto] = useState<string | null>(null);
 
   const zonas = useMemo(
     () => [...new Set(db.territorios.map((t) => t.zona))].sort((a, b) => a.localeCompare(b, "es")),
@@ -128,6 +135,7 @@ export function VistaMapa() {
       if (toque === "marcar") return marcarAlternando(v);
       if (toque === "consultar") return setDetalle(v.cuadra.id);
       if (toque === "editarForma") return setEditandoForma(v.cuadra.id);
+      if (toque === "agregarCuadra") return; // se dibuja tocando espacio vacío, no una cuadra
       setSeleccion((prev) => {
         const s = new Set(prev);
         if (s.has(v.cuadra.id)) s.delete(v.cuadra.id);
@@ -143,15 +151,53 @@ export function VistaMapa() {
     .filter((v): v is VistaCuadra => Boolean(v));
 
   const vistaDetalle = detalle ? indice.cuadras.get(detalle) ?? null : null;
+  const puntoTocadoObj = puntoTocado ? db.puntosReunion.find((p) => p.id === puntoTocado) ?? null : null;
   const vistaEditando = editandoForma ? indice.cuadras.get(editandoForma) ?? null : null;
 
+  const territorioDestino = db.territorios.find((t) => t.id === territorioNuevo) ?? null;
+  const letrasLibres = useMemo(() => {
+    if (!territorioDestino) return [];
+    const usadas = new Set(territorioDestino.cuadras.map((c) => c.letra));
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").filter((l) => !usadas.has(l));
+  }, [territorioDestino]);
+  const areaNueva = puntosNuevos.length >= 3 ? areaYCentroide([...puntosNuevos, puntosNuevos[0]]).areaM2 : 0;
+
+  const cancelarCuadraNueva = () => {
+    setPuntosNuevos([]);
+    setTerritorioNuevo("");
+    setLetraNueva("");
+  };
+
+  const guardarCuadraNueva = () => {
+    if (puntosNuevos.length < 3 || territorioNuevo === "") return;
+    acciones.crearCuadra(territorioNuevo, puntosNuevos, letraNueva || undefined);
+    cancelarCuadraNueva();
+  };
+
+  const puntosReunionUbicados = useMemo(
+    () => db.puntosReunion.filter((p) => p.activo && p.ubicacion).map((p) => p.ubicacion!),
+    [db.puntosReunion],
+  );
+
   const marcadores = useMemo(() => {
-    const lista: { latlng: LatLng; titulo: string; tipo: "reunion" | "yo" }[] = db.puntosReunion
-      .filter((p) => p.activo && p.ubicacion)
-      .map((p) => ({ latlng: p.ubicacion!, titulo: `Punto de reunión: ${p.nombre}`, tipo: "reunion" }));
+    const lista: { id?: string; latlng: LatLng; titulo: string; tipo: "reunion" | "yo" | "marcada" }[] =
+      db.puntosReunion
+        .filter((p) => p.activo && p.ubicacion)
+        .map((p) => ({ id: p.id, latlng: p.ubicacion!, titulo: `Punto de reunión: ${p.nombre}`, tipo: "reunion" }));
+    if (verMarcadas) {
+      for (const c of db.casasMarcadas) {
+        if (c.activa && c.ubicacion) {
+          lista.push({
+            latlng: c.ubicacion,
+            titulo: `Casa marcada: ${c.direccion} (Territorio ${c.territorioId})`,
+            tipo: "marcada",
+          });
+        }
+      }
+    }
     if (miUbicacion) lista.push({ latlng: miUbicacion, titulo: "Estoy aquí", tipo: "yo" });
     return lista;
-  }, [db.puntosReunion, miUbicacion]);
+  }, [db.puntosReunion, db.casasMarcadas, verMarcadas, miUbicacion]);
 
   const ubicarme = () => {
     if (!navigator.geolocation) {
@@ -182,7 +228,31 @@ export function VistaMapa() {
         centrarEn={centrarEn}
         editando={toque === "editarForma" ? editandoForma : null}
         onEditarVertices={(cuadraId, anillo) => acciones.guardarFormaCuadra(cuadraId, anillo)}
+        dibujando={toque === "agregarCuadra" ? puntosNuevos : null}
+        onClicMapa={
+          reubicandoPunto
+            ? (ll) => {
+                const punto = db.puntosReunion.find((p) => p.id === reubicandoPunto);
+                if (punto) acciones.guardarPunto({ ...punto, ubicacion: ll });
+                setReubicandoPunto(null);
+                setPuntoTocado(reubicandoPunto);
+              }
+            : toque === "agregarCuadra"
+              ? (ll) => setPuntosNuevos((prev) => [...prev, ll])
+              : undefined
+        }
+        onMarcador={(id) => {
+          if (reubicandoPunto) return;
+          if (db.puntosReunion.some((p) => p.id === id)) setPuntoTocado(id);
+        }}
       />
+
+      {reubicandoPunto && (
+        <div className="barra" style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 1000 }}>
+          <strong className="crece">Toca en el mapa la nueva ubicación del punto de reunión</strong>
+          <button className="btn" onClick={() => setReubicandoPunto(null)}>Cancelar</button>
+        </div>
+      )}
 
       <div className="mapa-superior no-imprimir">
         <div className="segmentado" role="group" aria-label="Qué hace tocar el mapa">
@@ -196,6 +266,7 @@ export function VistaMapa() {
                 if (t.clave !== "seleccionar") setSeleccion(new Set());
                 if (t.clave !== "consultar") setDetalle(null);
                 if (t.clave !== "editarForma") setEditandoForma(null);
+                if (t.clave !== "agregarCuadra") cancelarCuadraNueva();
               }}
             >
               {t.nombre}
@@ -262,6 +333,23 @@ export function VistaMapa() {
           </select>
           <button className="btn chico" onClick={ubicarme} title="Centrar en mi ubicación">◎ Dónde estoy</button>
           <button className="btn chico" onClick={() => setCentrarEn([GEO.limites[0], GEO.limites[1]])} title="Ver todo el territorio">⤢</button>
+          {puntosReunionUbicados.length > 0 && (
+            <button
+              className="btn chico"
+              onClick={() => setCentrarEn(puntosReunionUbicados)}
+              title="Centrar el mapa en los puntos de reunión"
+            >
+              ★ Puntos de reunión
+            </button>
+          )}
+          <label className="fila chico suave" style={{ gap: 4 }}>
+            <input
+              type="checkbox"
+              checked={verMarcadas}
+              onChange={(e) => setVerMarcadas(e.target.checked)}
+            />
+            Casas marcadas
+          </label>
         </div>
         <p className="ayuda-toque">{TOQUES.find((t) => t.clave === toque)?.ayuda}</p>
         {modo === "fecha" && (
@@ -296,6 +384,9 @@ export function VistaMapa() {
           </>
         )}
         <div className="fila-leyenda"><i style={{ background: "transparent", border: "2px solid #d03b3b", borderRadius: 2 }} /> Límite del territorio</div>
+        {verMarcadas && (
+          <div className="fila-leyenda"><i style={{ background: "#d03b3b", borderRadius: "50%" }} /> Casa marcada (no visitar)</div>
+        )}
       </div>
 
       {aviso && <div className="brindis no-imprimir">{aviso}</div>}
@@ -356,16 +447,92 @@ export function VistaMapa() {
             </p>
           </div>
           <footer>
+            {esCuadraDelMapaBase(vistaEditando.cuadra.origen) ? (
+              <button
+                className="btn peligro crece"
+                disabled={!db.geometriaEditada[vistaEditando.cuadra.id]}
+                onClick={() => {
+                  if (confirmar("¿Deshacer la forma corregida de esta cuadra y volver a la del mapa base?")) {
+                    acciones.restablecerFormaCuadra(vistaEditando.cuadra.id);
+                  }
+                }}
+              >
+                Deshacer forma
+              </button>
+            ) : (
+              <button
+                className="btn peligro crece"
+                onClick={() => {
+                  if (confirmar("¿Eliminar esta cuadra? Se dio de alta a mano y no viene del mapa base; se perderá también su historial.")) {
+                    acciones.eliminarCuadra(vistaEditando.cuadra.id);
+                    setEditandoForma(null);
+                  }
+                }}
+              >
+                Eliminar cuadra
+              </button>
+            )}
+          </footer>
+        </aside>
+      )}
+
+      {toque === "agregarCuadra" && puntosNuevos.length > 0 && (
+        <aside className="panel-lateral">
+          <header>
+            <h3 className="crece">Cuadra nueva · {puntosNuevos.length} puntos</h3>
+            <button className="btn fantasma" onClick={cancelarCuadraNueva} aria-label="Cancelar">✕</button>
+          </header>
+          <div className="cuerpo">
+            <p className="chico suave" style={{ margin: 0 }}>
+              {puntosNuevos.length < 3
+                ? "Toca al menos un punto más para cerrar el contorno."
+                : `Superficie estimada: ${areaTexto(areaNueva)}`}
+            </p>
+            <label className="campo">
+              Territorio
+              <select
+                className="btn chico"
+                value={territorioNuevo}
+                onChange={(e) => {
+                  setTerritorioNuevo(e.target.value ? Number(e.target.value) : "");
+                  setLetraNueva("");
+                }}
+              >
+                <option value="">Elige un territorio…</option>
+                {db.territorios
+                  .slice()
+                  .sort((a, b) => a.id - b.id)
+                  .map((t) => (
+                    <option key={t.id} value={t.id}>{t.id} · {t.nombre}</option>
+                  ))}
+              </select>
+            </label>
+            {territorioDestino && (
+              <label className="campo">
+                Letra
+                <select className="btn chico" value={letraNueva} onChange={(e) => setLetraNueva(e.target.value)}>
+                  <option value="">Siguiente libre ({letrasLibres[0] ?? "—"})</option>
+                  {letrasLibres.map((l) => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+          <footer>
             <button
-              className="btn peligro crece"
-              disabled={!db.geometriaEditada[vistaEditando.cuadra.id]}
-              onClick={() => {
-                if (confirmar("¿Deshacer la forma corregida de esta cuadra y volver a la del mapa base?")) {
-                  acciones.restablecerFormaCuadra(vistaEditando.cuadra.id);
-                }
-              }}
+              className="btn primario crece"
+              disabled={puntosNuevos.length < 3 || territorioNuevo === ""}
+              onClick={guardarCuadraNueva}
             >
-              Deshacer forma
+              Guardar cuadra
+            </button>
+            <button
+              className="btn"
+              disabled={puntosNuevos.length === 0}
+              onClick={() => setPuntosNuevos((prev) => prev.slice(0, -1))}
+            >
+              Deshacer último punto
             </button>
           </footer>
         </aside>
@@ -395,6 +562,43 @@ export function VistaMapa() {
             >
               Cómo llegar
             </a>
+          </footer>
+        </aside>
+      )}
+
+      {puntoTocadoObj && (
+        <aside className="panel-lateral">
+          <header>
+            <h3 className="crece">{puntoTocadoObj.nombre}</h3>
+            <button className="btn fantasma" onClick={() => setPuntoTocado(null)} aria-label="Cerrar">✕</button>
+          </header>
+          <div className="cuerpo">
+            {puntoTocadoObj.direccion && <p style={{ margin: 0 }}>{puntoTocadoObj.direccion}</p>}
+            <Chip color={puntoTocadoObj.activo ? "#16a34a" : "#94a3b8"}>
+              {puntoTocadoObj.activo ? "Activo" : "Inactivo"}
+            </Chip>
+          </div>
+          <footer>
+            <button
+              className="btn primario crece"
+              onClick={() => {
+                setReubicandoPunto(puntoTocadoObj.id);
+                setPuntoTocado(null);
+              }}
+            >
+              Cambiar ubicación
+            </button>
+            {puntoTocadoObj.ubicacion && (
+              <a
+                className="btn"
+                href={enlaceRuta(puntoTocadoObj.ubicacion)}
+                target="_blank"
+                rel="noreferrer"
+                title="Abrir en la app de mapas"
+              >
+                Cómo llegar
+              </a>
+            )}
           </footer>
         </aside>
       )}

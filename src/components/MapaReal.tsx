@@ -38,19 +38,23 @@ export interface PropsMapaReal {
   /** Números de territorio sobre el mapa. */
   verNumeros?: boolean;
   /** Marcadores extra: puntos de reunión, ubicación del usuario… */
-  marcadores?: { latlng: LatLng; titulo: string; tipo: "reunion" | "yo" }[];
+  marcadores?: { id?: string; latlng: LatLng; titulo: string; tipo: "reunion" | "yo" | "marcada" }[];
   /** Si se define, un clic en cualquier parte devuelve la coordenada. */
   onClicMapa?: (latlng: LatLng) => void;
+  /** Se llama con el id de un marcador (de los que lo tengan) al tocarlo. */
+  onMarcador?: (id: string) => void;
   centrarEn?: LatLng[] | null;
   /** Id de la cuadra en edición de forma: muestra sus vértices arrastrables. */
   editando?: string | null;
   /** Se llama con el anillo completo cada vez que cambia (arrastre, alta, baja). */
   onEditarVertices?: (cuadraId: string, anillo: LatLng[]) => void;
+  /** Puntos ya puestos de una cuadra nueva en construcción (anillo abierto). */
+  dibujando?: LatLng[] | null;
 }
 
 export function MapaReal({
   vistas, color, seleccion, onCuadra, foco, capa, verNumeros = true,
-  marcadores = [], onClicMapa, centrarEn, editando = null, onEditarVertices,
+  marcadores = [], onClicMapa, onMarcador, centrarEn, editando = null, onEditarVertices, dibujando = null,
 }: PropsMapaReal) {
   const contenedor = useRef<HTMLDivElement>(null);
   const mapa = useRef<L.Map | null>(null);
@@ -59,11 +63,14 @@ export function MapaReal({
   const capaNumeros = useRef<L.LayerGroup | null>(null);
   const capaMarcadores = useRef<L.LayerGroup | null>(null);
   const capaVertices = useRef<L.LayerGroup | null>(null);
+  const capaDibujo = useRef<L.LayerGroup | null>(null);
   const poligonos = useRef(new Map<string, L.Polygon>());
   const alClic = useRef(onCuadra);
   alClic.current = onCuadra;
   const alEditarVertices = useRef(onEditarVertices);
   alEditarVertices.current = onEditarVertices;
+  const alMarcador = useRef(onMarcador);
+  alMarcador.current = onMarcador;
 
   /* --------------------------------------------------------------- montaje */
   useEffect(() => {
@@ -99,6 +106,7 @@ export function MapaReal({
     capaNumeros.current = L.layerGroup().addTo(m);
     capaMarcadores.current = L.layerGroup().addTo(m);
     capaVertices.current = L.layerGroup().addTo(m);
+    capaDibujo.current = L.layerGroup().addTo(m);
 
     const registro = poligonos.current;
     return () => {
@@ -187,17 +195,26 @@ export function MapaReal({
     if (!grupo) return;
     grupo.clearLayers();
     for (const mk of marcadores) {
-      L.marker(mk.latlng as L.LatLngExpression, {
+      const claseIcono =
+        mk.tipo === "yo" ? "marca-yo" : mk.tipo === "marcada" ? "marca-marcada" : "marca-reunion";
+      const glifo = mk.tipo === "yo" ? "" : mk.tipo === "marcada" ? "✕" : "★";
+      const marcador = L.marker(mk.latlng as L.LatLngExpression, {
         icon: L.divIcon({
-          className: mk.tipo === "yo" ? "marca-yo" : "marca-reunion",
-          html: mk.tipo === "yo" ? "" : "<span>★</span>",
+          className: claseIcono,
+          html: glifo ? `<span>${glifo}</span>` : "",
           iconSize: [22, 22],
           iconAnchor: [11, 11],
         }),
         title: mk.titulo,
-      })
-        .bindTooltip(mk.titulo)
-        .addTo(grupo);
+      }).bindTooltip(mk.titulo);
+      if (mk.id) {
+        const id = mk.id;
+        marcador.on("click", (e) => {
+          L.DomEvent.stopPropagation(e);
+          alMarcador.current?.(id);
+        });
+      }
+      marcador.addTo(grupo);
     }
   }, [marcadores]);
 
@@ -277,6 +294,36 @@ export function MapaReal({
 
     redibujar();
   }, [editando, vistas]);
+
+  /* ----------------------------------------------------- cuadra nueva (alta) */
+  useEffect(() => {
+    const grupo = capaDibujo.current;
+    if (!grupo) return;
+    grupo.clearLayers();
+    if (!dibujando || dibujando.length === 0) return;
+
+    if (dibujando.length >= 3) {
+      L.polygon(dibujando as L.LatLngExpression[], {
+        color: "#0f172a",
+        weight: 2,
+        dashArray: "5 4",
+        fillColor: "#0f172a",
+        fillOpacity: 0.15,
+      }).addTo(grupo);
+    } else if (dibujando.length === 2) {
+      L.polyline(dibujando as L.LatLngExpression[], { color: "#0f172a", weight: 2, dashArray: "5 4" }).addTo(grupo);
+    }
+
+    dibujando.forEach((punto, i) => {
+      L.circleMarker(punto as L.LatLngExpression, {
+        radius: 6,
+        color: "#0f172a",
+        weight: 2,
+        fillColor: i === 0 ? "#22c55e" : "#ffffff",
+        fillOpacity: 1,
+      }).addTo(grupo);
+    });
+  }, [dibujando]);
 
   /* ----------------------------------------------------------- clic general */
   useEffect(() => {

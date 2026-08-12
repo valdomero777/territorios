@@ -18,6 +18,15 @@ export function areaTexto(m2: number): string {
 
 export const ZONAS_MAPA = mapaBase.zonas.map((z) => z.nombre).sort();
 
+const ORIGENES_MAPA_BASE = new Set(
+  mapaBase.territorios.flatMap((t) => t.cuadras.map((c) => c.id)),
+);
+
+/** `false` si la cuadra no viene del mapa base (se dio de alta a mano en la app). */
+export function esCuadraDelMapaBase(origen: string): boolean {
+  return ORIGENES_MAPA_BASE.has(origen);
+}
+
 export const COLOR_REFERENCIA: Record<string, string> = {
   Escuela: "#2e3092",
   Iglesia: "#f5821f",

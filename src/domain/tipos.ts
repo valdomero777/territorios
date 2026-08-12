@@ -94,6 +94,28 @@ export interface PuntoReunion {
 }
 
 /**
+ * Dirección que no se debe visitar (oposición, Testigos, petición expresa, etc.).
+ * Es el catálogo de "casas marcadas": vive fuera de la cuadra porque una casa
+ * marcada no cambia el estado de trabajo de la cuadra completa, y porque no
+ * siempre se conoce su ubicación exacta en el mapa desde el principio.
+ */
+export interface CasaMarcada {
+  id: ID;
+  territorioId: number;
+  direccion: string;
+  /** Ubicación exacta en el mapa; no siempre se conoce de entrada. */
+  ubicacion?: LatLng;
+  /** Fecha en que se marcó por primera vez. */
+  fechaInicial?: Fecha;
+  /** Última vez que se confirmó que sigue vigente la marca. */
+  fechaVisita?: Fecha;
+  /** Quién hizo la última revisión (texto libre, no siempre es alguien del catálogo de personas). */
+  atendio?: string;
+  activa: boolean;
+  notas?: string;
+}
+
+/**
  * Forma de servicio de un día. La congregación maneja varias a la vez —mañana,
  * tarde, cartas, calles, zoom— y cada una lleva su propio encargado, así que no
  * basta con un turno de mañana y tarde.
@@ -215,6 +237,7 @@ export interface BaseDatos {
   territorios: Territorio[];
   personas: Persona[];
   puntosReunion: PuntoReunion[];
+  casasMarcadas: CasaMarcada[];
   jornadas: Jornada[];
   registros: Registro[];
   asignaciones: AsignacionTerritorio[];

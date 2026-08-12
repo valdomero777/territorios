@@ -6,11 +6,12 @@ import { crearRepo } from "../data/repo";
 import { aplicarGeometriaEditada, baseInicial, cicloAbierto, migrar, nuevoId } from "../domain/db";
 import { construirIndice, resumenGlobal, resumenesTerritorio } from "../domain/estado";
 import type { Indice, ResumenGlobal, ResumenTerritorio } from "../domain/estado";
+import { areaYCentroide } from "../domain/mapa";
 import { hoy, sumarDias } from "../domain/fechas";
 import { anioServicioDe } from "../domain/s13";
 import type {
-  AsignacionTerritorio, BaseDatos, Ciclo, Config, Cuadra, Fecha, Jornada, LatLng, Persona,
-  PuntoReunion, Registro, Territorio,
+  AsignacionTerritorio, BaseDatos, CasaMarcada, Ciclo, Config, Cuadra, Fecha, Jornada, LatLng,
+  Persona, PuntoReunion, Registro, Territorio,
 } from "../domain/tipos";
 
 interface Acciones {
@@ -19,6 +20,10 @@ interface Acciones {
   guardarTerritorio(id: number, cambios: Partial<Omit<Territorio, "cuadras">>): void;
   guardarCuadra(territorioId: number, cuadraId: string, cambios: Partial<Cuadra>): void;
   moverCuadra(cuadraId: string, destinoId: number, nuevaLetra?: string): void;
+  /** Da de alta una cuadra nueva, dibujada a mano, dentro de un territorio. */
+  crearCuadra(territorioId: number, anillo: LatLng[], letra?: string): void;
+  /** Da de baja (permanente) una cuadra creada a mano; no aplica a las del mapa base. */
+  eliminarCuadra(cuadraId: string): void;
 
   /** Corrige a mano la forma de una cuadra (arrastrando vértices en el Mapa). */
   guardarFormaCuadra(cuadraId: string, anillo: LatLng[]): void;
@@ -49,6 +54,9 @@ interface Acciones {
 
   guardarPunto(p: Omit<PuntoReunion, "id"> & { id?: string }): void;
   eliminarPunto(id: string): void;
+
+  guardarCasaMarcada(c: Omit<CasaMarcada, "id"> & { id?: string }): void;
+  eliminarCasaMarcada(id: string): void;
 
   guardarJornada(j: Omit<Jornada, "id" | "creada"> & { id?: string }): string;
   eliminarJornada(id: string): void;
@@ -120,9 +128,17 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
       }
       dbRef.current = inicial;
       setDb(inicial);
-      // Se guarda siempre el resultado de la migración: si no, el dato viejo se
-      // queda en el navegador y hay que volver a migrarlo en cada arranque.
-      void repo.guardar(inicial);
+      // Se guarda el resultado de la migración para no tener que volver a
+      // migrarlo en cada arranque — PERO solo si la carga vino de verdad de la
+      // nube (o es un congregación nueva sin datos aún). Si `cargar()` cayó al
+      // respaldo local porque Firestore falló (por ejemplo al reanudar la app
+      // tras estar en segundo plano, con la señal todavía reconectando),
+      // `nubeFallandoRef.current` ya quedó en `true` de forma síncrona dentro
+      // de `cargar()`, antes de que esta promesa se resuelva. Guardar en ese
+      // momento subiría a la nube una copia de este dispositivo que puede
+      // estar vieja o incompleta, borrando cambios recientes de otros — el
+      // bug real detrás de que los puntos de reunión desaparecieran solos.
+      if (!nubeFallandoRef.current) void repo.guardar(inicial);
     });
     const cancelar = repo.suscribir((remota) => {
       // Mientras la nube está fallando, lo que llegue aquí puede ser la copia
@@ -225,6 +241,61 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
                 : d.geometriaEditada,
           };
         }),
+
+      crearCuadra: (territorioId, anillo, letra) =>
+        actualizar((d) => {
+          const destino = d.territorios.find((t) => t.id === territorioId);
+          if (!destino || anillo.length < 3) return d;
+          const usadas = new Set(destino.cuadras.map((c) => c.letra));
+          const letraFinal =
+            letra && !usadas.has(letra)
+              ? letra
+              : "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").find((l) => !usadas.has(l)) ?? "Z";
+          const cerrado: LatLng[] =
+            anillo[0][0] === anillo[anillo.length - 1][0] && anillo[0][1] === anillo[anillo.length - 1][1]
+              ? anillo
+              : [...anillo, anillo[0]];
+          const { areaM2, centro: centroLatLng } = areaYCentroide(cerrado);
+          const nueva: Cuadra = {
+            id: `${territorioId}-${letraFinal}`,
+            // Sin geometría de origen en el mapa base: no hay letra del PDF que
+            // la ligue a una revisión futura, así que se le da un id propio que
+            // nunca va a coincidir con uno de `mapaBase`.
+            origen: nuevoId("cuadra"),
+            letra: letraFinal,
+            d: "",
+            centro: { x: 0, y: 0 },
+            latlng: cerrado,
+            centroLatLng,
+            areaM2,
+            areaU: 0,
+            activa: true,
+          };
+          return {
+            ...d,
+            territorios: d.territorios.map((t) =>
+              t.id === territorioId
+                ? {
+                    ...t,
+                    cuadras: [...t.cuadras, nueva].sort((a, b) => a.letra.localeCompare(b.letra, "es")),
+                  }
+                : t,
+            ),
+          };
+        }),
+
+      eliminarCuadra: (cuadraId) =>
+        actualizar((d) => ({
+          ...d,
+          territorios: d.territorios.map((t) => ({
+            ...t,
+            cuadras: t.cuadras.filter((c) => c.id !== cuadraId),
+          })),
+          registros: d.registros.filter((r) => r.cuadraId !== cuadraId),
+          geometriaEditada: Object.fromEntries(
+            Object.entries(d.geometriaEditada).filter(([id]) => id !== cuadraId),
+          ),
+        })),
 
       guardarFormaCuadra: (cuadraId, anillo) =>
         actualizar((d) => {
@@ -393,6 +464,28 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
         actualizar((d) => ({
           ...d,
           puntosReunion: d.puntosReunion.filter((p) => p.id !== id),
+        })),
+
+      guardarCasaMarcada: (c) =>
+        actualizar((d) => {
+          if (c.id && d.casasMarcadas.some((x) => x.id === c.id)) {
+            return {
+              ...d,
+              casasMarcadas: d.casasMarcadas.map((x) =>
+                x.id === c.id ? { ...x, ...c, id: c.id! } : x,
+              ),
+            };
+          }
+          return {
+            ...d,
+            casasMarcadas: [...d.casasMarcadas, { ...c, id: c.id ?? nuevoId("casa") }],
+          };
+        }),
+
+      eliminarCasaMarcada: (id) =>
+        actualizar((d) => ({
+          ...d,
+          casasMarcadas: d.casasMarcadas.filter((c) => c.id !== id),
         })),
 
       guardarJornada: (j) => {

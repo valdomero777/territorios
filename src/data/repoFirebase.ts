@@ -6,7 +6,7 @@ import { db } from "./firebase";
 import type { Repo } from "./repo";
 import { RepoLocal } from "./repoLocal";
 import type {
-  AsignacionTerritorio, BaseDatos, Ciclo, Config, EventoEspecial, Jornada,
+  AsignacionTerritorio, BaseDatos, CasaMarcada, Ciclo, Config, EventoEspecial, Jornada,
   LatLng, Persona, PuntoReunion, Registro, Territorio,
 } from "../domain/tipos";
 
@@ -49,6 +49,7 @@ interface Estado {
   ciclos: Ciclo[];
   eventos: EventoEspecial[];
   puntosReunion: PuntoReunion[];
+  casasMarcadas: CasaMarcada[];
   territorios: TerritorioOverlay[];
 }
 
@@ -79,6 +80,7 @@ function ensamblar(
     ciclos: estado.ciclos,
     eventos: estado.eventos,
     puntosReunion: estado.puntosReunion,
+    casasMarcadas: estado.casasMarcadas,
     // La geometría (etiqueta, cuadras completas) la rellena `migrar()` desde
     // el mapa base; aquí solo va el overlay editable. `migrar()` tolera esta
     // forma parcial — es la misma que ya usa para adaptar datos viejos.
@@ -135,6 +137,7 @@ export class RepoFirebase implements Repo {
   private refCiclos: Ciclo[] | null = null;
   private refEventos: EventoEspecial[] | null = null;
   private refPuntosReunion: PuntoReunion[] | null = null;
+  private refCasasMarcadas: CasaMarcada[] | null = null;
 
   private cachePersonas = new Map<string, Persona>();
   private cacheRegistros = new Map<string, Registro>();
@@ -243,6 +246,7 @@ export class RepoFirebase implements Repo {
       refTerritorios: this.refTerritorios, refGeometria: this.refGeometria,
       refConfig: this.refConfig, refCiclos: this.refCiclos,
       refEventos: this.refEventos, refPuntosReunion: this.refPuntosReunion,
+      refCasasMarcadas: this.refCasasMarcadas,
       ultimoEstadoTexto: this.ultimoEstadoTexto,
       cachePersonas: new Map(this.cachePersonas),
       cacheRegistros: new Map(this.cacheRegistros),
@@ -303,6 +307,7 @@ export class RepoFirebase implements Repo {
       base.ciclos !== this.refCiclos ||
       base.eventos !== this.refEventos ||
       base.puntosReunion !== this.refPuntosReunion ||
+      base.casasMarcadas !== this.refCasasMarcadas ||
       base.territorios !== this.refTerritorios;
     if (tocaEstado) {
       const estado: Estado = {
@@ -311,6 +316,7 @@ export class RepoFirebase implements Repo {
         ciclos: base.ciclos,
         eventos: base.eventos,
         puntosReunion: base.puntosReunion,
+        casasMarcadas: base.casasMarcadas,
         territorios: overlayDeTerritorios(base.territorios),
       };
       const texto = JSON.stringify(estado);
@@ -323,6 +329,7 @@ export class RepoFirebase implements Repo {
       this.refCiclos = base.ciclos;
       this.refEventos = base.eventos;
       this.refPuntosReunion = base.puntosReunion;
+      this.refCasasMarcadas = base.casasMarcadas;
       this.refTerritorios = base.territorios;
 
       for (const op of operaciones) op();
