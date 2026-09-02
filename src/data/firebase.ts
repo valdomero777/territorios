@@ -1,6 +1,9 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { initializeFirestore } from "firebase/firestore";
+import {
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+} from "firebase/firestore";
+import type { Firestore } from "firebase/firestore";
 
 /**
  * Credenciales del proyecto de Firebase compartido. Vienen de variables de
@@ -30,7 +33,31 @@ const app = CONFIGURADO
   : null;
 
 export const auth = app ? getAuth(app) : null;
+
 // Los campos opcionales del dominio (capitanId, notas, telefono…) llegan como
 // `undefined` cuando no se capturan, no como ausentes del objeto — Firestore
 // rechaza `undefined` a menos que se le pida ignorarlo explícitamente.
-export const db = app ? initializeFirestore(app, { ignoreUndefinedProperties: true }) : null;
+//
+// La caché persistente (IndexedDB) es lo que mantiene el consumo dentro de la
+// cuota gratuita: sin ella, CADA vez que alguien abre la app —y en el celular
+// eso pasa muchas veces al día— Firestore vuelve a bajar del servidor los
+// cientos de documentos de la bitácora, y cada documento bajado es una
+// "lectura" facturable. Con caché, al reabrir la app los datos salen del
+// propio teléfono y el servidor solo manda lo que cambió desde la última vez.
+// `persistentMultipleTabManager` permite además tener la app abierta en varias
+// pestañas del mismo equipo sin que una desactive la caché de la otra.
+const conCache = (a: NonNullable<typeof app>): Firestore => {
+  try {
+    return initializeFirestore(a, {
+      ignoreUndefinedProperties: true,
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    });
+  } catch (e) {
+    // Navegador sin IndexedDB (modo privado de algunos, WebView recortado…):
+    // la app sigue funcionando, solo que sin el ahorro de lecturas.
+    console.warn("No se pudo activar la caché en disco de Firestore; se sigue sin ella.", e);
+    return initializeFirestore(a, { ignoreUndefinedProperties: true });
+  }
+};
+
+export const db = app ? conCache(app) : null;

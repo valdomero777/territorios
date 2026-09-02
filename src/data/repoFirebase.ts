@@ -1,5 +1,6 @@
 import {
-  collection, doc, getDoc, getDocs, onSnapshot, setDoc, writeBatch,
+  collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, onSnapshot, setDoc,
+  writeBatch,
 } from "firebase/firestore";
 import type { DocumentData, Unsubscribe, WriteBatch } from "firebase/firestore";
 import { db } from "./firebase";
@@ -25,6 +26,49 @@ import type {
  * falta duplicar esa lógica aquí.
  */
 const TAMANIO_LOTE = 450; // margen bajo el límite de 500 operaciones por writeBatch de Firestore
+
+/**
+ * Espera antes de subir a la nube. Los formularios llaman a `guardar()` en
+ * CADA tecla (las notas de una cuadra, el nombre de la congregación…): sin
+ * esta pausa, escribir una nota de 40 letras eran 40 escrituras en Firestore
+ * —y 40 lecturas en cada celular conectado, porque cada escritura se le
+ * reenvía a todos—. Con la pausa, la ráfaga entera se vuelve una sola
+ * escritura. Lo local (el respaldo del propio aparato) sigue siendo inmediato,
+ * así que no se arriesga nada de lo capturado.
+ */
+const ESPERA_ESCRITURA = 2000;
+
+/**
+ * Compara dos datos sin importar el orden de las llaves, y tratando "campo
+ * ausente" y `undefined` como lo mismo.
+ *
+ * Esto era el agujero grande de consumo. Antes se comparaba con
+ * `JSON.stringify(a) === JSON.stringify(b)`, y eso mide el ORDEN además del
+ * contenido: Firestore devuelve los campos de cada documento en orden
+ * alfabético (`capitanId, cicloId, creado, cuadraId, fecha, id`), mientras que
+ * los objetos de la app llevan el orden en que los arma el código
+ * (`id, cuadraId, fecha, cicloId, …`). Como el texto nunca coincidía, TODO
+ * documento se consideraba "cambiado" y se reescribía completo en el primer
+ * guardado de cada arranque: cientos o miles de escrituras diarias que no
+ * cambiaban ni un dato, más la lluvia de lecturas que eso provoca en los demás
+ * dispositivos. Comparando el contenido de verdad, un arranque normal ya no
+ * escribe nada.
+ */
+function igual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((x, i) => igual(x, b[i]));
+  }
+  const oa = a as Record<string, unknown>;
+  const ob = b as Record<string, unknown>;
+  for (const clave of new Set([...Object.keys(oa), ...Object.keys(ob)])) {
+    if (oa[clave] === undefined && ob[clave] === undefined) continue;
+    if (!igual(oa[clave], ob[clave])) return false;
+  }
+  return true;
+}
 
 // Todo cuelga de un solo documento ancla `congregacion/estado` (2 segmentos,
 // como pide Firestore para un documento). Las colecciones que crecen son
@@ -105,7 +149,7 @@ function sincronizarColeccion<T extends { id: string }>(
   for (const item of actuales) {
     vistos.add(item.id);
     const previo = cache.get(item.id);
-    if (previo && JSON.stringify(previo) === JSON.stringify(item)) continue;
+    if (previo && igual(previo, item)) continue;
     operaciones.push(() => {
       if (!db) return;
       lote().set(docEn(nombreColeccion, item.id), item as DocumentData);
@@ -144,7 +188,7 @@ export class RepoFirebase implements Repo {
   private cacheAsignaciones = new Map<string, AsignacionTerritorio>();
   private cacheJornadas = new Map<string, Jornada>();
   private cacheGeometria = new Map<string, { id: string; anillo: LatLng[] }>();
-  private ultimoEstadoTexto: string | null = null;
+  private ultimoEstado: Estado | null = null;
 
   // Plan B: si la nube falla (cuota agotada, sin señal con el servidor…),
   // no hay razón para que el capitán pierda lo que acaba de registrar en la
@@ -155,6 +199,23 @@ export class RepoFirebase implements Repo {
   private respaldo = new RepoLocal();
   private fallando = false;
   private oyentesEstado = new Set<(fallando: boolean) => void>();
+
+  // Cambio esperando a subir (ver `ESPERA_ESCRITURA`) y envío en curso.
+  private pendiente: BaseDatos | null = null;
+  private temporizador: ReturnType<typeof setTimeout> | null = null;
+  private enVuelo: Promise<void> = Promise.resolve();
+
+  constructor() {
+    if (typeof document === "undefined") return;
+    // Al minimizar la app o cerrar la pestaña se sube en el acto lo que esté
+    // esperando: en el celular, "salir de la app" es lo normal, no la
+    // excepción, y no debe quedarse nada sin sincronizar por la pausa.
+    const alSalir = () => void this.vaciarPendiente();
+    window.addEventListener("pagehide", alSalir);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") alSalir();
+    });
+  }
 
   private avisarEstado(fallando: boolean) {
     if (this.fallando === fallando) return;
@@ -180,17 +241,39 @@ export class RepoFirebase implements Repo {
     }
   }
 
+  /**
+   * Baja todo. `deCache` lee de la copia en disco del propio aparato, que no
+   * gasta cuota; sin ella, abrir la app costaba una lectura facturable por
+   * cada documento guardado (bitácora incluida) y otra vez lo mismo al
+   * enganchar los listeners de `suscribir()`. Ahora el arranque normal sale de
+   * la caché y los listeners solo piden al servidor lo que cambió desde la
+   * última vez que este dispositivo se sincronizó.
+   */
+  private async leerTodo(deCache: boolean) {
+    const leerDoc = deCache ? getDocFromCache : getDoc;
+    const leerCol = deCache ? getDocsFromCache : getDocs;
+    const estadoSnap = await leerDoc(docEstado());
+    if (!estadoSnap.exists()) {
+      // En caché, "no existe" puede significar apenas "todavía no se ha
+      // sincronizado nunca": hay que ir al servidor para saberlo de verdad.
+      if (deCache) throw new Error("sin copia local todavía");
+      return null;
+    }
+    const [personas, registros, asignaciones, jornadas, geometria] = await Promise.all([
+      leerCol(colEn("personas")),
+      leerCol(colEn("registros")),
+      leerCol(colEn("asignaciones")),
+      leerCol(colEn("jornadas")),
+      leerCol(colEn("geometria")),
+    ]);
+    return { estadoSnap, personas, registros, asignaciones, jornadas, geometria };
+  }
+
   private async cargarDeFirestore(): Promise<BaseDatos | null> {
     if (!db) return null;
-    const estadoSnap = await getDoc(docEstado());
-    if (!estadoSnap.exists()) return null;
-    const [personas, registros, asignaciones, jornadas, geometria] = await Promise.all([
-      getDocs(colEn("personas")),
-      getDocs(colEn("registros")),
-      getDocs(colEn("asignaciones")),
-      getDocs(colEn("jornadas")),
-      getDocs(colEn("geometria")),
-    ]);
+    const leido = (await this.leerTodo(true).catch(() => null)) ?? (await this.leerTodo(false));
+    if (!leido) return null;
+    const { estadoSnap, personas, registros, asignaciones, jornadas, geometria } = leido;
     const estado = estadoSnap.data() as Estado;
     const geometriaEditada = Object.fromEntries(
       geometria.docs.map((d) => [d.id, (d.data() as { anillo: LatLng[] }).anillo]),
@@ -228,14 +311,42 @@ export class RepoFirebase implements Repo {
     this.cacheGeometria = new Map(
       Object.entries(geometriaEditada).map(([id, anillo]) => [id, { id, anillo }]),
     );
-    this.ultimoEstadoTexto = JSON.stringify(estado);
+    this.ultimoEstado = estado;
   }
 
+  /**
+   * Guarda ya en este aparato y programa la subida a la nube. Si llegan más
+   * cambios antes de que venza `ESPERA_ESCRITURA`, se reinicia la cuenta y
+   * solo sube el último estado: una ráfaga de tecleo cuesta una escritura, no
+   * una por letra.
+   */
   async guardar(base: BaseDatos): Promise<void> {
     if (!db) return;
     // Respaldo local primero: si todo lo de abajo falla, ya quedó a salvo.
     void this.respaldo.guardar(base);
 
+    this.pendiente = base;
+    if (this.temporizador !== null) clearTimeout(this.temporizador);
+    this.temporizador = setTimeout(() => void this.vaciarPendiente(), ESPERA_ESCRITURA);
+  }
+
+  /** Sube de inmediato lo que esté esperando (al cerrar la app, por ejemplo). */
+  private vaciarPendiente(): Promise<void> {
+    if (this.temporizador !== null) {
+      clearTimeout(this.temporizador);
+      this.temporizador = null;
+    }
+    const base = this.pendiente;
+    if (!base) return Promise.resolve();
+    this.pendiente = null;
+    // En fila, no en paralelo: dos envíos a la vez calcularían su diferencia
+    // contra la misma caché y se duplicarían escrituras.
+    this.enVuelo = this.enVuelo.then(() => this.enviar(base));
+    return this.enVuelo;
+  }
+
+  private async enviar(base: BaseDatos): Promise<void> {
+    if (!db) return;
     // Instantánea de refs y cachés: `sincronizarColeccion` los va actualizando
     // como si el envío ya hubiera funcionado (para no recalcular el diff dos
     // veces). Si el envío de verdad falla, se restauran, así el próximo
@@ -247,7 +358,7 @@ export class RepoFirebase implements Repo {
       refConfig: this.refConfig, refCiclos: this.refCiclos,
       refEventos: this.refEventos, refPuntosReunion: this.refPuntosReunion,
       refCasasMarcadas: this.refCasasMarcadas,
-      ultimoEstadoTexto: this.ultimoEstadoTexto,
+      ultimoEstado: this.ultimoEstado,
       cachePersonas: new Map(this.cachePersonas),
       cacheRegistros: new Map(this.cacheRegistros),
       cacheAsignaciones: new Map(this.cacheAsignaciones),
@@ -319,11 +430,10 @@ export class RepoFirebase implements Repo {
         casasMarcadas: base.casasMarcadas,
         territorios: overlayDeTerritorios(base.territorios),
       };
-      const texto = JSON.stringify(estado);
       let escribirEstado: Promise<void> | null = null;
-      if (texto !== this.ultimoEstadoTexto) {
+      if (!igual(estado, this.ultimoEstado)) {
         escribirEstado = setDoc(docEstado(), estado);
-        this.ultimoEstadoTexto = texto;
+        this.ultimoEstado = estado;
       }
       this.refConfig = base.config;
       this.refCiclos = base.ciclos;
