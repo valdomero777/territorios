@@ -1,84 +1,15 @@
 import { useMemo } from "react";
 import { BarraApilada, BarrasHorizontales, Columnas, Leyenda, PALETA } from "../components/graficas";
 import { BarraAvance, Metrica, Vacio } from "../components/ui";
+import { ComparadorPeriodos } from "../components/ComparadorPeriodos";
 import type { Dato } from "../components/graficas";
-import { diasEntre, diaSemana, fechaCorta, fechaLarga, haceTexto, hoy, sumarDias } from "../domain/fechas";
-import type { Fecha, Territorio } from "../domain/tipos";
+import { diasEntre, fechaLarga, haceTexto, hoy, sumarDias } from "../domain/fechas";
 import { useApp } from "../hooks/useApp";
-import type { Indice } from "../domain/estado";
-import type { BaseDatos } from "../domain/tipos";
 
 const SEMANAS = 12;
 
-/** Los 6 días de una semana de servicio, de martes a domingo. */
-function diasDeSemana(inicio: Fecha): Fecha[] {
-  return Array.from({ length: 6 }, (_, i) => sumarDias(inicio, i));
-}
-
-interface TrabajoTerritorioDia {
-  territorio: Territorio;
-  letras: string[];
-  terminado: boolean;
-}
-
-/** Qué territorios y cuadras se trabajaron cada día de la semana que empieza en `inicio`. */
-function desglosePorDia(
-  db: BaseDatos,
-  indice: Indice,
-  inicio: Fecha,
-): { fecha: Fecha; territorios: TrabajoTerritorioDia[] }[] {
-  return diasDeSemana(inicio).map((fecha) => {
-    const porTerritorio = new Map<number, Set<string>>();
-    for (const r of db.registros) {
-      if (r.fecha !== fecha) continue;
-      const v = indice.cuadras.get(r.cuadraId);
-      if (!v) continue;
-      const letras = porTerritorio.get(v.territorio.id) ?? new Set<string>();
-      letras.add(v.cuadra.letra);
-      porTerritorio.set(v.territorio.id, letras);
-    }
-    const territorios = [...porTerritorio.entries()]
-      .map(([territorioId, letras]): TrabajoTerritorioDia => {
-        const territorio = db.territorios.find((t) => t.id === territorioId)!;
-        const activas = territorio.cuadras.filter((c) => c.activa);
-        const terminado =
-          activas.length > 0 &&
-          activas.every((c) => indice.cuadras.get(c.id)?.historial.some((r) => r.fecha <= fecha) ?? false);
-        return {
-          territorio,
-          letras: [...letras].sort((a, b) => a.localeCompare(b, "es", { numeric: true })),
-          terminado,
-        };
-      })
-      .sort((a, b) => a.territorio.id - b.territorio.id);
-    return { fecha, territorios };
-  });
-}
-
 export function VistaMetricas() {
   const { db, indice, resumenes, global, ciclo } = useApp();
-
-  /* Semana de servicio: siempre de martes a domingo, sin importar qué día es
-     hoy. La actual es la que contiene a hoy; la anterior, la que le precede. */
-  const semanaActual = useMemo(() => {
-    const hoyF = hoy();
-    const diasDesdeMartes = (diaSemana(hoyF) - 2 + 7) % 7;
-    const inicio = sumarDias(hoyF, -diasDesdeMartes);
-    return { inicio, fin: sumarDias(inicio, 5) };
-  }, []);
-  const semanaAnterior = useMemo(() => {
-    const inicio = sumarDias(semanaActual.inicio, -7);
-    return { inicio, fin: sumarDias(inicio, 5) };
-  }, [semanaActual]);
-
-  const desgloseActual = useMemo(
-    () => desglosePorDia(db, indice, semanaActual.inicio),
-    [db, indice, semanaActual],
-  );
-  const desgloseAnterior = useMemo(
-    () => desglosePorDia(db, indice, semanaAnterior.inicio),
-    [db, indice, semanaAnterior],
-  );
 
   /* Ritmo: cuadras registradas por semana, últimas 12 semanas. */
   const semanas = useMemo(() => {
@@ -184,18 +115,7 @@ export function VistaMetricas() {
     <div className="rejilla" style={{ gap: 16 }}>
       <h2>Métricas</h2>
 
-      <div className="rejilla dos">
-        <TablaSemana
-          titulo="Semana anterior"
-          rango={semanaAnterior}
-          dias={desgloseAnterior}
-        />
-        <TablaSemana
-          titulo="Semana actual"
-          rango={semanaActual}
-          dias={desgloseActual}
-        />
-      </div>
+      <ComparadorPeriodos />
 
       <div className="rejilla auto">
         <Metrica
@@ -330,65 +250,5 @@ export function VistaMetricas() {
         </div>
       </section>
     </div>
-  );
-}
-
-function TablaSemana({
-  titulo,
-  rango,
-  dias,
-}: {
-  titulo: string;
-  rango: { inicio: Fecha; fin: Fecha };
-  dias: { fecha: Fecha; territorios: TrabajoTerritorioDia[] }[];
-}) {
-  const total = dias.reduce((s, d) => s + d.territorios.reduce((s2, t) => s2 + (t.terminado ? 1 : t.letras.length), 0), 0);
-  return (
-    <section className="tarjeta">
-      <h3>{titulo}</h3>
-      <p className="chico suave" style={{ margin: "2px 0 10px" }}>
-        {fechaCorta(rango.inicio)} al {fechaCorta(rango.fin)}.
-      </p>
-      {total === 0 ? (
-        <Vacio>Sin cuadras registradas esta semana.</Vacio>
-      ) : (
-        <div className="desplaza">
-          <table className="tabla">
-            <thead>
-              <tr>
-                <th style={{ width: 90 }}>Día</th>
-                <th>Territorios y cuadras trabajadas</th>
-              </tr>
-            </thead>
-            <tbody>
-              {dias.map((d) => (
-                <tr key={d.fecha}>
-                  <td className="mono chico">{fechaCorta(d.fecha)}</td>
-                  <td>
-                    {d.territorios.length === 0 ? (
-                      <span className="chico suave">—</span>
-                    ) : (
-                      <div className="rejilla" style={{ gap: 4 }}>
-                        {d.territorios.map((t) => (
-                          <span key={t.territorio.id} className="fila chico" style={{ gap: 6, flexWrap: "wrap" }}>
-                            <i style={{ width: 9, height: 9, borderRadius: 3, background: t.territorio.color, flex: "0 0 auto" }} />
-                            <strong>{t.territorio.nombre}</strong>
-                            {t.terminado ? (
-                              <span className="suave">· territorio completo</span>
-                            ) : (
-                              <span className="suave">: {t.letras.join(", ")}</span>
-                            )}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
   );
 }
