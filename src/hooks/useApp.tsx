@@ -3,7 +3,7 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { crearRepo } from "../data/repo";
-import { aplicarGeometriaEditada, baseInicial, cicloAbierto, migrar, nuevoId } from "../domain/db";
+import { aplicarGeometriaEditada, baseInicial, cicloAbierto, cicloDe, migrar, nuevoId } from "../domain/db";
 import { construirIndice, resumenGlobal, resumenesTerritorio } from "../domain/estado";
 import type { Indice, ResumenGlobal, ResumenTerritorio } from "../domain/estado";
 import { areaYCentroide } from "../domain/mapa";
@@ -68,6 +68,17 @@ interface Acciones {
 
   registrarTrabajo(cuadraIds: string[], datos?: Partial<Registro>): void;
   eliminarRegistro(id: string): void;
+  /**
+   * Corrige de un solo golpe lo trabajado en un día: da de alta las cuadras que
+   * se marcaron y retira los registros de ESE día que se desmarcaron. Existe
+   * aparte de `registrarTrabajo`/`eliminarRegistro` porque corregir un día
+   * completo mueve muchas cuadras a la vez y cada llamada suelta es una
+   * escritura a la nube; así va todo en una.
+   */
+  editarDia(
+    fecha: Fecha,
+    cambios: { agregar: string[]; quitar: string[]; capitanId?: string },
+  ): void;
 
   cerrarCiclo(nombreNuevo?: string): void;
 
@@ -170,8 +181,6 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
   );
 
   const acciones = useMemo<Acciones>(() => {
-    const conCiclo = (d: BaseDatos) => cicloAbierto(d)?.id ?? d.ciclos[0]?.id ?? "";
-
     return {
       guardarConfig: (cambios) =>
         actualizar((d) => ({ ...d, config: { ...d.config, ...cambios } })),
@@ -399,7 +408,7 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
           if (!registrarCuadras) return { ...d, asignaciones };
 
           const territorio = d.territorios.find((t) => t.id === a.territorioId);
-          const ciclo = conCiclo(d);
+          const ciclo = cicloDe(d, fechaCompletado);
           const ahora = new Date().toISOString();
           const yaEnCiclo = new Set(
             d.registros.filter((r) => r.cicloId === ciclo).map((r) => r.cuadraId),
@@ -571,18 +580,46 @@ export function ProveedorApp({ children }: { children: ReactNode }) {
 
       registrarTrabajo: (cuadraIds, datos) =>
         actualizar((d) => {
-          const ciclo = conCiclo(d);
+          const fecha = datos?.fecha ?? hoy();
+          const ciclo = cicloDe(d, fecha);
           const ahora = new Date().toISOString();
           const nuevos: Registro[] = cuadraIds.map((cuadraId) => ({
             id: nuevoId("reg"),
             cuadraId,
-            fecha: datos?.fecha ?? hoy(),
+            fecha,
             cicloId: ciclo,
             capitanId: datos?.capitanId,
             notas: datos?.notas,
             creado: ahora,
           }));
           return { ...d, registros: [...d.registros, ...nuevos] };
+        }),
+
+      editarDia: (fecha, { agregar, quitar, capitanId }) =>
+        actualizar((d) => {
+          if (!agregar.length && !quitar.length) return d;
+          // La baja se limita a la fecha editada: el historial de esa misma
+          // cuadra en otros días no se toca nunca.
+          const aQuitar = new Set(quitar);
+          const registros = d.registros.filter(
+            (r) => !(r.fecha === fecha && aQuitar.has(r.cuadraId)),
+          );
+          const yaEseDia = new Set(
+            registros.filter((r) => r.fecha === fecha).map((r) => r.cuadraId),
+          );
+          const ciclo = cicloDe(d, fecha);
+          const ahora = new Date().toISOString();
+          const nuevos: Registro[] = agregar
+            .filter((cuadraId) => !yaEseDia.has(cuadraId))
+            .map((cuadraId) => ({
+              id: nuevoId("reg"),
+              cuadraId,
+              fecha,
+              cicloId: ciclo,
+              capitanId: capitanId || undefined,
+              creado: ahora,
+            }));
+          return { ...d, registros: [...registros, ...nuevos] };
         }),
 
       eliminarRegistro: (id) =>

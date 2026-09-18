@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Chip, Vacio } from "./ui";
+import { EditorDia } from "./EditorDia";
 import { PALETA } from "./graficas";
 import { fechaCorta, hoy } from "../domain/fechas";
 import {
@@ -7,6 +8,7 @@ import {
   textoPeriodo,
 } from "../domain/periodos";
 import type { DiaDelPeriodo, Periodo, ResumenPeriodo } from "../domain/periodos";
+import type { Fecha } from "../domain/tipos";
 import { useApp } from "../hooks/useApp";
 
 /** Tope del desglose diario: más allá la tabla deja de ser legible. */
@@ -27,6 +29,8 @@ export function ComparadorPeriodos() {
   const hoyF = hoy();
   const [izquierda, setIzquierda] = useState<Periodo>(() => desplazar(semanaDe(hoyF), -1));
   const [derecha, setDerecha] = useState<Periodo>(() => semanaDe(hoyF));
+  /** Día que se está corrigiendo en el editor, si hay alguno abierto. */
+  const [editando, setEditando] = useState<Fecha | null>(null);
 
   const diasIzq = useMemo(() => desglosePorDia(db, indice, izquierda), [db, indice, izquierda]);
   const diasDer = useMemo(() => desglosePorDia(db, indice, derecha), [db, indice, derecha]);
@@ -61,6 +65,7 @@ export function ComparadorPeriodos() {
           dias={diasIzq}
           resumen={resIzq}
           diferencia={resIzq.cuadras - resDer.cuadras}
+          alEditarDia={setEditando}
         />
         <PanelPeriodo
           periodo={derecha}
@@ -68,8 +73,15 @@ export function ComparadorPeriodos() {
           dias={diasDer}
           resumen={resDer}
           diferencia={resDer.cuadras - resIzq.cuadras}
+          alEditarDia={setEditando}
         />
       </div>
+
+      {/* `key` por fecha: cada día abre el editor con su propio borrador, sin
+          arrastrar lo que se hubiera tocado en el anterior. */}
+      {editando && (
+        <EditorDia key={editando} fecha={editando} onCerrar={() => setEditando(null)} />
+      )}
     </section>
   );
 }
@@ -80,6 +92,7 @@ function PanelPeriodo({
   dias,
   resumen,
   diferencia,
+  alEditarDia,
 }: {
   periodo: Periodo;
   alCambiar: (p: Periodo) => void;
@@ -87,6 +100,7 @@ function PanelPeriodo({
   resumen: ResumenPeriodo;
   /** Cuadras de más (o de menos) frente al otro panel. */
   diferencia: number;
+  alEditarDia: (f: Fecha) => void;
 }) {
   const semanaHoy = semanaDe(hoy());
   const esLaActual = esSemanaDeServicio(periodo) && periodo.inicio === semanaHoy.inicio;
@@ -176,12 +190,18 @@ function PanelPeriodo({
         )}
       </div>
 
-      <TablaDias dias={dias} />
+      <TablaDias dias={dias} alEditarDia={alEditarDia} />
     </section>
   );
 }
 
-function TablaDias({ dias }: { dias: DiaDelPeriodo[] }) {
+function TablaDias({
+  dias,
+  alEditarDia,
+}: {
+  dias: DiaDelPeriodo[];
+  alEditarDia: (f: Fecha) => void;
+}) {
   if (dias.length > MAX_DIAS_TABLA) {
     return (
       <Vacio>
@@ -190,9 +210,7 @@ function TablaDias({ dias }: { dias: DiaDelPeriodo[] }) {
       </Vacio>
     );
   }
-  if (dias.every((d) => d.cuadras === 0 && d.encargados.length === 0)) {
-    return <Vacio>Sin cuadras registradas ni encargados asignados en este periodo.</Vacio>;
-  }
+
   return (
     <div className="desplaza">
       <table className="tabla">
@@ -200,6 +218,7 @@ function TablaDias({ dias }: { dias: DiaDelPeriodo[] }) {
           <tr>
             <th style={{ width: 90 }}>Día</th>
             <th>Territorios y cuadras trabajadas</th>
+            <th style={{ width: 70 }} />
           </tr>
         </thead>
         <tbody>
@@ -249,6 +268,15 @@ function TablaDias({ dias }: { dias: DiaDelPeriodo[] }) {
                     ))}
                   </div>
                 )}
+              </td>
+              <td>
+                <button
+                  className="btn chico"
+                  onClick={() => alEditarDia(d.fecha)}
+                  title={`Corregir lo trabajado el ${fechaCorta(d.fecha)}`}
+                >
+                  Editar
+                </button>
               </td>
             </tr>
           ))}

@@ -1,7 +1,7 @@
 import { areaYCentroide, mapaBase } from "./mapa";
 import { hoy } from "./fechas";
 import { MODALIDADES_POR_DEFECTO } from "./tipos";
-import type { BaseDatos, CasaMarcada, Config, Cuadra, Jornada, LatLng, Persona, Territorio } from "./tipos";
+import type { BaseDatos, CasaMarcada, Config, Cuadra, Fecha, ID, Jornada, LatLng, Persona, Territorio } from "./tipos";
 
 export const VERSION_BD = 1;
 
@@ -285,3 +285,15 @@ interface PersonaAntigua {
 }
 
 export const cicloAbierto = (db: BaseDatos) => db.ciclos.find((c) => c.fin === null) ?? null;
+
+/**
+ * El ciclo al que pertenece un día. No siempre es el abierto: se captura
+ * trabajo con fecha vieja (se olvidó marcar, o se pone al corriente un atraso)
+ * y ese trabajo es de la vuelta que estaba corriendo *ese* día, no de la de
+ * hoy. Acreditarlo al ciclo abierto inflaba el avance del ciclo en curso con
+ * cuadras que no le tocaban.
+ */
+export function cicloDe(db: BaseDatos, fecha: Fecha): ID {
+  const propio = db.ciclos.find((c) => c.inicio <= fecha && (c.fin === null || fecha <= c.fin));
+  return (propio ?? cicloAbierto(db) ?? db.ciclos[0])?.id ?? "";
+}
