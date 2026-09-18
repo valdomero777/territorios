@@ -9,6 +9,7 @@
  * trabajar después.
  */
 
+import { cicloDe } from "./db";
 import { diaSemana, diasEntre, fechaCorta, hoy, sumarDias } from "./fechas";
 import type { Indice } from "./estado";
 import type { BaseDatos, Fecha, Jornada, Territorio } from "./tipos";
@@ -74,9 +75,8 @@ export function textoPeriodo(p: Periodo): string {
 
 export interface TrabajoTerritorioDia {
   territorio: Territorio;
+  /** Letras de las cuadras trabajadas ESE día y en ESE turno. Nada más. */
   letras: string[];
-  /** El territorio quedó cubierto por completo a más tardar ese día. */
-  terminado: boolean;
 }
 
 /**
@@ -92,8 +92,6 @@ export type MarcaEncargado = "falta" | "descuadre" | "pendiente";
 
 export interface EncargadoDia {
   nombre: string;
-  /** Nombre de la modalidad que dirigió, p.ej. "Mañana". */
-  modalidad: string;
   /**
    * `null` cuando hay registros a su nombre. Se mira por encargado y no por
    * día completo porque las modalidades se reportan por separado: si el de la
@@ -103,51 +101,89 @@ export interface EncargadoDia {
   marca: MarcaEncargado | null;
 }
 
-export interface DiaDelPeriodo {
-  fecha: Fecha;
+/** Cajón donde cae el trabajo que no se pudo atribuir a ningún turno. */
+export const SIN_TURNO = "__sin_turno";
+
+/**
+ * Un turno del día (mañana, tarde…) con lo que se trabajó en él.
+ *
+ * El `Registro` no guarda la modalidad —solo la persona—, así que el turno se
+ * deduce del rol: a qué modalidad estaba asignado ese día el hermano a cuyo
+ * nombre quedó el registro. Cuando no se puede deducir (registro sin
+ * encargado, encargado fuera del rol de ese día, o el mismo hermano asignado
+ * a dos modalidades a la vez) el trabajo cae en `SIN_TURNO` en vez de
+ * repartirse a la adivina.
+ */
+export interface TurnoDia {
+  clave: string;
+  /** Nombre de la modalidad, p.ej. "Mañana". */
+  modalidad: string;
+  orden: number;
+  /** Encargados del rol para ese turno, hayan reportado o no. */
+  encargados: EncargadoDia[];
   territorios: TrabajoTerritorioDia[];
   cuadras: number;
-  /** Encargados con jornada de territorio ese día, hayan reportado o no. */
-  encargados: EncargadoDia[];
+}
+
+export interface DiaDelPeriodo {
+  fecha: Fecha;
+  /** Lo trabajado ese día, partido por turno. */
+  turnos: TurnoDia[];
+  cuadras: number;
+  /**
+   * Territorios que quedaron cubiertos por completo ESE día: al cerrar el día
+   * anterior les faltaba al menos una cuadra de la vuelta y al cerrar éste ya
+   * no. No se confunde con lo trabajado en el día, que va en los turnos.
+   */
+  completados: Territorio[];
   /** Hubo encargado asignado y el día quedó sin un solo registro. */
   faltaInforme: boolean;
   /** Hay trabajo registrado, pero a nombre de alguien fuera del rol del día. */
   hayDescuadre: boolean;
 }
 
-function encargadosDe(
-  db: BaseDatos,
-  jornadas: Jornada[],
-  capitanesConRegistro: Set<string>,
-  fecha: Fecha,
-  hoyF: Fecha,
-  cuadras: number,
-): EncargadoDia[] {
-  const conTerritorio = new Map(
-    db.config.modalidades.filter((m) => m.conTerritorio).map((m) => [m.id, m.nombre]),
-  );
-  const marcar = (capitanId: string): MarcaEncargado | null => {
-    if (capitanesConRegistro.has(capitanId)) return null;
-    if (fecha > hoyF) return null;
-    if (fecha === hoyF) return "pendiente";
-    return cuadras === 0 ? "falta" : "descuadre";
-  };
-  const vistos = new Set<string>();
-  const out: EncargadoDia[] = [];
+/**
+ * Turnos a los que estaba asignado cada encargado ese día. Si alguien sale en
+ * dos, su trabajo ya no se puede repartir entre ellos.
+ */
+function turnosPorCapitan(jornadas: Jornada[]): Map<string, string[]> {
+  const m = new Map<string, string[]>();
   for (const j of jornadas) {
-    const modalidad = conTerritorio.get(j.modalidadId);
-    if (!modalidad || !j.capitanId) continue;
-    const nombre = db.personas.find((p) => p.id === j.capitanId)?.nombre;
-    if (!nombre) continue;
-    const clave = `${j.capitanId}|${j.modalidadId}`;
-    if (vistos.has(clave)) continue;
-    vistos.add(clave);
-    out.push({ nombre, modalidad, marca: marcar(j.capitanId) });
+    if (!j.capitanId) continue;
+    const previos = m.get(j.capitanId) ?? [];
+    if (!previos.includes(j.modalidadId)) m.set(j.capitanId, [...previos, j.modalidadId]);
   }
-  return out;
+  return m;
 }
 
-/** Qué se trabajó cada día del periodo, día por día. */
+/** Territorios que ese día pasaron de incompletos a completos en su vuelta. */
+function completadosEse(
+  db: BaseDatos,
+  indice: Indice,
+  territorios: Territorio[],
+  fecha: Fecha,
+): Territorio[] {
+  // Sin ciclos la pregunta es "¿se trabajó alguna vez?"; con ciclos, "¿se
+  // trabajó en la vuelta en curso?" — si no, un territorio cerrado hace dos
+  // años volvería a anunciarse como recién completado.
+  const ciclo = db.config.politicaCiclo === "sinCiclo" ? null : cicloDe(db, fecha);
+  const completoAl = (t: Territorio, limite: (f: Fecha) => boolean) =>
+    t.cuadras
+      .filter((c) => c.activa)
+      .every((c) =>
+        (indice.cuadras.get(c.id)?.historial ?? []).some(
+          (r) => limite(r.fecha) && (ciclo === null || r.cicloId === ciclo),
+        ),
+      );
+  return territorios.filter(
+    (t) =>
+      t.cuadras.some((c) => c.activa) &&
+      completoAl(t, (f) => f <= fecha) &&
+      !completoAl(t, (f) => f < fecha),
+  );
+}
+
+/** Qué se trabajó cada día del periodo, día por día y turno por turno. */
 export function desglosePorDia(db: BaseDatos, indice: Indice, periodo: Periodo): DiaDelPeriodo[] {
   const registrosPorFecha = new Map<Fecha, typeof db.registros>();
   for (const r of db.registros) {
@@ -161,48 +197,97 @@ export function desglosePorDia(db: BaseDatos, indice: Indice, periodo: Periodo):
     if (lista) lista.push(j);
     else jornadasPorFecha.set(j.fecha, [j]);
   }
+  const modalidades = new Map(db.config.modalidades.map((m) => [m.id, m]));
 
   const hoyF = hoy();
   return fechasDe(periodo).map((fecha) => {
-    const porTerritorio = new Map<number, Set<string>>();
+    const registros = registrosPorFecha.get(fecha) ?? [];
+    const jornadas = (jornadasPorFecha.get(fecha) ?? []).filter((j) => j.capitanId);
+    const deCapitan = turnosPorCapitan(jornadas);
+
+    /** clave de turno -> territorioId -> letras trabajadas. */
+    const porTurno = new Map<string, Map<number, Set<string>>>();
     const capitanesConRegistro = new Set<string>();
+    const tocados = new Set<number>();
     let cuadras = 0;
-    for (const r of registrosPorFecha.get(fecha) ?? []) {
+    for (const r of registros) {
       if (r.capitanId) capitanesConRegistro.add(r.capitanId);
       const v = indice.cuadras.get(r.cuadraId);
       if (!v) continue;
+      const suyos = r.capitanId ? deCapitan.get(r.capitanId) ?? [] : [];
+      const clave = suyos.length === 1 ? suyos[0] : SIN_TURNO;
+      const porTerritorio = porTurno.get(clave) ?? new Map<number, Set<string>>();
       const letras = porTerritorio.get(v.territorio.id) ?? new Set<string>();
       letras.add(v.cuadra.letra);
       porTerritorio.set(v.territorio.id, letras);
+      porTurno.set(clave, porTerritorio);
+      tocados.add(v.territorio.id);
       cuadras += 1;
     }
-    const territorios = [...porTerritorio.entries()]
-      .map(([territorioId, letras]): TrabajoTerritorioDia => {
-        const territorio = db.territorios.find((t) => t.id === territorioId)!;
-        const activas = territorio.cuadras.filter((c) => c.activa);
-        const terminado =
-          activas.length > 0 &&
-          activas.every(
-            (c) => indice.cuadras.get(c.id)?.historial.some((r) => r.fecha <= fecha) ?? false,
-          );
-        return {
-          territorio,
+
+    const marcar = (capitanId: string): MarcaEncargado | null => {
+      if (capitanesConRegistro.has(capitanId)) return null;
+      if (fecha > hoyF) return null;
+      if (fecha === hoyF) return "pendiente";
+      return cuadras === 0 ? "falta" : "descuadre";
+    };
+
+    const trabajoDe = (clave: string): TrabajoTerritorioDia[] =>
+      [...(porTurno.get(clave) ?? new Map<number, Set<string>>()).entries()]
+        .map(([territorioId, letras]) => ({
+          territorio: db.territorios.find((t) => t.id === territorioId)!,
           letras: [...letras].sort((a, b) => a.localeCompare(b, "es", { numeric: true })),
-          terminado,
+        }))
+        .sort((a, b) => a.territorio.id - b.territorio.id);
+
+    // Sale un turno por cada modalidad con encargado en el rol —aunque no haya
+    // capturado nada, que es justo el hueco que interesa ver— y por cada
+    // modalidad que acabó con registros encima.
+    const claves = new Set<string>([
+      ...jornadas
+        .filter((j) => modalidades.get(j.modalidadId)?.conTerritorio ?? false)
+        .map((j) => j.modalidadId),
+      ...porTurno.keys(),
+    ]);
+
+    const turnos: TurnoDia[] = [...claves]
+      .map((clave): TurnoDia => {
+        const modalidad = modalidades.get(clave);
+        const vistos = new Set<string>();
+        const encargados: EncargadoDia[] = [];
+        for (const j of jornadas) {
+          if (j.modalidadId !== clave || vistos.has(j.capitanId!)) continue;
+          const nombre = db.personas.find((p) => p.id === j.capitanId)?.nombre;
+          if (!nombre) continue;
+          vistos.add(j.capitanId!);
+          encargados.push({ nombre, marca: marcar(j.capitanId!) });
+        }
+        const territorios = trabajoDe(clave);
+        return {
+          clave,
+          modalidad: modalidad?.nombre ?? (clave === SIN_TURNO ? "Sin turno" : clave),
+          // El cajón de lo no atribuible va siempre hasta abajo.
+          orden: clave === SIN_TURNO ? Number.MAX_SAFE_INTEGER : modalidad?.orden ?? 0,
+          encargados,
+          territorios,
+          cuadras: territorios.reduce((s, t) => s + t.letras.length, 0),
         };
       })
-      .sort((a, b) => a.territorio.id - b.territorio.id);
+      .sort((a, b) => a.orden - b.orden || a.modalidad.localeCompare(b.modalidad, "es"));
 
-    const encargados = encargadosDe(
-      db, jornadasPorFecha.get(fecha) ?? [], capitanesConRegistro, fecha, hoyF, cuadras,
-    );
+    const marcas = turnos.flatMap((t) => t.encargados.map((e) => e.marca));
     return {
       fecha,
-      territorios,
+      turnos,
       cuadras,
-      encargados,
-      faltaInforme: encargados.some((e) => e.marca === "falta"),
-      hayDescuadre: encargados.some((e) => e.marca === "descuadre"),
+      completados: completadosEse(
+        db,
+        indice,
+        db.territorios.filter((t) => tocados.has(t.id)),
+        fecha,
+      ),
+      faltaInforme: marcas.includes("falta"),
+      hayDescuadre: marcas.includes("descuadre"),
     };
   });
 }
@@ -233,11 +318,11 @@ export function resumenPeriodo(dias: DiaDelPeriodo[]): ResumenPeriodo {
     if (d.cuadras > 0) diasConSalida += 1;
     if (d.faltaInforme) diasSinInforme += 1;
     if (d.hayDescuadre) diasDescuadrados += 1;
-    for (const t of d.territorios) {
-      tocados.add(t.territorio.id);
-      if (t.terminado) completados.add(t.territorio.id);
+    for (const t of d.completados) completados.add(t.id);
+    for (const turno of d.turnos) {
+      for (const t of turno.territorios) tocados.add(t.territorio.id);
+      for (const e of turno.encargados) capitanes.add(e.nombre);
     }
-    for (const e of d.encargados) capitanes.add(e.nombre);
   }
   return {
     cuadras,

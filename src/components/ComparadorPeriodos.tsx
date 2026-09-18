@@ -4,10 +4,10 @@ import { EditorDia } from "./EditorDia";
 import { PALETA } from "./graficas";
 import { fechaCorta, hoy } from "../domain/fechas";
 import {
-  desglosePorDia, desplazar, esSemanaDeServicio, normalizar, resumenPeriodo, semanaDe,
+  SIN_TURNO, desglosePorDia, desplazar, esSemanaDeServicio, normalizar, resumenPeriodo, semanaDe,
   textoPeriodo,
 } from "../domain/periodos";
-import type { DiaDelPeriodo, Periodo, ResumenPeriodo } from "../domain/periodos";
+import type { DiaDelPeriodo, Periodo, ResumenPeriodo, TurnoDia } from "../domain/periodos";
 import type { Fecha } from "../domain/tipos";
 import { useApp } from "../hooks/useApp";
 
@@ -226,44 +226,16 @@ function TablaDias({
             <tr key={d.fecha}>
               <td className="mono chico">{fechaCorta(d.fecha)}</td>
               <td>
-                {d.territorios.length === 0 && d.encargados.length === 0 ? (
+                {d.turnos.length === 0 && d.completados.length === 0 ? (
                   <span className="chico suave">—</span>
                 ) : (
-                  <div className="rejilla" style={{ gap: 4 }}>
-                    {d.territorios.map((t) => (
-                      <span
-                        key={t.territorio.id}
-                        className="fila chico"
-                        style={{ gap: 6, flexWrap: "wrap" }}
-                      >
-                        <i
-                          style={{
-                            width: 9, height: 9, borderRadius: 3,
-                            background: t.territorio.color, flex: "0 0 auto",
-                          }}
-                        />
-                        <strong>{t.territorio.nombre}</strong>
-                        {t.terminado ? (
-                          <span className="suave">· territorio completo</span>
-                        ) : (
-                          <span className="suave">: {t.letras.join(", ")}</span>
-                        )}
-                      </span>
+                  <div className="rejilla" style={{ gap: 6 }}>
+                    {d.turnos.map((t) => (
+                      <TurnoDelDia key={t.clave} turno={t} />
                     ))}
-                    {d.encargados.map((e) => (
-                      <span
-                        key={`${e.modalidad}|${e.nombre}`}
-                        className="fila chico"
-                        style={{ gap: 6, flexWrap: "wrap" }}
-                      >
-                        <span className="suave">
-                          {e.modalidad}: {e.nombre}
-                        </span>
-                        {e.marca === "falta" && <Chip color={PALETA.critico}>sin informe</Chip>}
-                        {e.marca === "descuadre" && (
-                          <Chip color={PALETA.aviso}>sin registros a su nombre</Chip>
-                        )}
-                        {e.marca === "pendiente" && <Chip color={PALETA.aviso}>pendiente</Chip>}
+                    {d.completados.map((t) => (
+                      <span key={t.id} className="fila chico" style={{ gap: 6 }}>
+                        <Chip color={PALETA.bueno}>{t.nombre} quedó completo</Chip>
                       </span>
                     ))}
                   </div>
@@ -282,6 +254,61 @@ function TablaDias({
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * Un turno del día. Se enseña lo trabajado EN ESE TURNO —las letras de las
+ * cuadras, no el estado del territorio—, porque la pregunta que se contesta
+ * aquí es "¿qué hizo el grupo de la tarde?", no "¿cómo va el territorio?".
+ */
+function TurnoDelDia({ turno }: { turno: TurnoDia }) {
+  return (
+    <div className="rejilla" style={{ gap: 2 }}>
+      <span className="fila chico" style={{ gap: 6, flexWrap: "wrap" }}>
+        <strong>{turno.modalidad}</strong>
+        {turno.encargados.length === 0 ? (
+          <span className="suave">
+            {turno.clave === SIN_TURNO
+              ? "no se pudo saber de qué turno fue"
+              : "sin encargado en el rol"}
+          </span>
+        ) : (
+          turno.encargados.map((e) => (
+            <span key={e.nombre} className="fila chico" style={{ gap: 4 }}>
+              <span className="suave">{e.nombre}</span>
+              {e.marca === "falta" && <Chip color={PALETA.critico}>sin informe</Chip>}
+              {e.marca === "descuadre" && (
+                <Chip color={PALETA.aviso}>sin registros a su nombre</Chip>
+              )}
+              {e.marca === "pendiente" && <Chip color={PALETA.aviso}>pendiente</Chip>}
+            </span>
+          ))
+        )}
+        {/* El "0 cuadras" sobra: para eso está la marca de sin informe. */}
+        {turno.cuadras > 0 && (
+          <span className="suave mono">
+            {turno.cuadras === 1 ? "1 cuadra" : `${turno.cuadras} cuadras`}
+          </span>
+        )}
+      </span>
+      {turno.territorios.map((t) => (
+        <span
+          key={t.territorio.id}
+          className="fila chico"
+          style={{ gap: 6, flexWrap: "wrap", paddingLeft: 10 }}
+        >
+          <i
+            style={{
+              width: 9, height: 9, borderRadius: 3,
+              background: t.territorio.color, flex: "0 0 auto",
+            }}
+          />
+          <strong>{t.territorio.nombre}</strong>
+          <span className="suave">: {t.letras.join(", ")}</span>
+        </span>
+      ))}
     </div>
   );
 }
